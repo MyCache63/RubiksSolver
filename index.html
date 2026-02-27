@@ -290,6 +290,72 @@ canvas {
   font-size: 14px;
   min-width: unset;
 }
+
+/* Show Off mode bar */
+#showoff-bar {
+  display: none;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 12px 16px;
+  background: rgba(26, 26, 46, 0.9);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  z-index: 100;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+}
+
+#showoff-bar.visible {
+  display: flex;
+}
+
+#showoff-grid-btns {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.grid-btn {
+  background: rgba(255, 255, 255, 0.08);
+  color: #e0e0e0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.grid-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.grid-btn.active {
+  background: rgba(99, 102, 241, 0.3);
+  border-color: rgba(99, 102, 241, 0.5);
+}
+
+#showoff-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+#showoff-actions label {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.7);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
 </style>
 </head>
 <body>
@@ -303,6 +369,7 @@ canvas {
   <div class="logo">RUBIK'S SOLVER</div>
   <div style="display:flex;gap:8px;">
     <button class="btn" id="btn-toggle-face-controls" title="Toggle face buttons">Controls</button>
+    <button class="btn btn-primary" id="btn-showoff" title="Show Off mode">Show Off</button>
     <button class="btn" id="btn-help" title="Keyboard shortcuts">?</button>
   </div>
 </div>
@@ -344,6 +411,28 @@ canvas {
   </div>
   <div id="face-controls">
     <!-- Filled by JS -->
+  </div>
+</div>
+
+<div id="showoff-bar">
+  <div id="showoff-grid-btns">
+    <span style="font-size:12px;color:rgba(255,255,255,0.5);margin-right:4px;">Grid:</span>
+    <button class="grid-btn" data-grid="1">1</button>
+    <button class="grid-btn" data-grid="2">2&times;2</button>
+    <button class="grid-btn active" data-grid="3">3&times;3</button>
+    <button class="grid-btn" data-grid="4">4&times;4</button>
+    <button class="grid-btn" data-grid="5">5&times;5</button>
+  </div>
+  <div id="showoff-actions">
+    <button class="btn btn-primary" id="so-scramble">Scramble All</button>
+    <select class="btn speed-select" id="so-speed">
+      <option value="200">Medium</option>
+      <option value="80" selected>Fast</option>
+      <option value="1">Instant</option>
+    </select>
+    <button class="btn btn-primary" id="so-solve">Solve All</button>
+    <label><input type="checkbox" id="so-continuous"> Continuous</label>
+    <button class="btn" id="so-exit">Exit</button>
   </div>
 </div>
 
@@ -1285,6 +1374,7 @@ function determineMoveFromDrag(cubiePos, faceNormal, dragDir) {
 }
 
 function onPointerDown(event) {
+  if (showOffMode) return;
   if (isAnimating || currentSolution) return;
   if (event.button && event.button !== 0) return; // left click only
 
@@ -1666,8 +1756,8 @@ document.addEventListener('keydown', (e) => {
 
   if (isAnimating) return;
 
-  // Block manual moves during solution playback (but allow camera controls above)
-  if (currentSolution) return;
+  // Block manual moves during solution playback or show-off mode
+  if (currentSolution || showOffMode) return;
 
   const key = e.key.toUpperCase();
   const clockwise = !e.shiftKey;
@@ -1787,6 +1877,95 @@ document.getElementById('btn-help').addEventListener('click', () => {
     'Scroll to zoom'
   );
 });
+
+// ─── SHOW OFF MODE ───────────────────────────────────────────
+
+let showOffMode = false;
+let showOffCubes = [];
+let showOffBusy = false;
+let continuousMode = false;
+let continuousRunning = false;
+
+function enterShowOffMode() {
+  if (showOffMode) return;
+  showOffMode = true;
+
+  // Hide normal UI
+  document.getElementById('bottom-bar').style.display = 'none';
+  document.getElementById('info-overlay').style.display = 'none';
+  cubieGroup.visible = false;
+  faceLabelGroup.visible = false;
+
+  // Show showoff bar
+  document.getElementById('showoff-bar').classList.add('visible');
+
+  // Hide show off button, show nothing special in top bar
+  document.getElementById('btn-showoff').style.display = 'none';
+  document.getElementById('btn-toggle-face-controls').style.display = 'none';
+
+  // Build default 3×3 grid
+  createShowOffGrid(3);
+}
+
+function exitShowOffMode() {
+  if (!showOffMode) return;
+
+  // Stop continuous mode
+  continuousMode = false;
+  document.getElementById('so-continuous').checked = false;
+
+  // Clear show-off cubes
+  clearShowOffGrid();
+
+  showOffMode = false;
+
+  // Restore normal UI
+  document.getElementById('bottom-bar').style.display = '';
+  document.getElementById('info-overlay').style.display = '';
+  cubieGroup.visible = true;
+  faceLabelGroup.visible = true;
+
+  // Hide showoff bar
+  document.getElementById('showoff-bar').classList.remove('visible');
+
+  // Restore buttons
+  document.getElementById('btn-showoff').style.display = '';
+  document.getElementById('btn-toggle-face-controls').style.display = '';
+
+  // Reset camera
+  animateCameraToPosition(new THREE.Vector3(5, 4, 5), 500);
+  orbitControls.minDistance = 4;
+  orbitControls.maxDistance = 15;
+}
+
+function animateCameraToPosition(targetPos, duration = 500) {
+  if (isCameraAnimating) return;
+  isCameraAnimating = true;
+  const startPos = camera.position.clone();
+  const startTime = performance.now();
+  function animate(now) {
+    const t = Math.min((now - startTime) / duration, 1);
+    const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    camera.position.lerpVectors(startPos, targetPos, eased);
+    camera.lookAt(0, 0, 0);
+    if (t < 1) {
+      requestAnimationFrame(animate);
+    } else {
+      camera.position.copy(targetPos);
+      camera.lookAt(0, 0, 0);
+      isCameraAnimating = false;
+    }
+  }
+  requestAnimationFrame(animate);
+}
+
+// Stubs — filled in by later steps
+function createShowOffGrid(n) { /* Step 3 */ }
+function clearShowOffGrid() { /* Step 3 */ }
+
+// Wire showoff buttons
+document.getElementById('btn-showoff').addEventListener('click', enterShowOffMode);
+document.getElementById('so-exit').addEventListener('click', exitShowOffMode);
 
 // ─── WINDOW RESIZE ───────────────────────────────────────────
 
