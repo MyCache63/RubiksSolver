@@ -2173,20 +2173,15 @@ class ShowOffCube {
         if (t < 1) {
           requestAnimationFrame(animate);
         } else {
+          // Apply pivot's 90° rotation to each cubie, then reparent
           for (const mesh of layerCubies) {
-            pivot.updateMatrixWorld();
-            const worldMat = new THREE.Matrix4().copy(mesh.matrixWorld);
-            // Convert from world to local group space
-            const groupInv = new THREE.Matrix4().copy(self.group.matrixWorld).invert();
-            worldMat.premultiply(groupInv);
+            mesh.position.applyQuaternion(pivot.quaternion);
+            mesh.quaternion.premultiply(pivot.quaternion);
 
             pivot.remove(mesh);
             self.group.add(mesh);
 
-            mesh.position.setFromMatrixPosition(worldMat);
-            mesh.quaternion.setFromRotationMatrix(worldMat);
-
-            // Snap position
+            // Snap position to grid
             mesh.userData.pos = {
               x: Math.round(mesh.position.x / STEP),
               y: Math.round(mesh.position.y / STEP),
@@ -2315,8 +2310,8 @@ class ConfettiSystem {
 
     for (const normal of normals) {
       const faceCenter = cubeWorldPos.clone().add(normal.clone().multiplyScalar(STEP * 1.5));
-      // 12 particles per face
-      for (let i = 0; i < 12; i++) {
+      // 6 particles per face (36 per cube — keeps mobile perf reasonable)
+      for (let i = 0; i < 6; i++) {
         const color = CONFETTI_COLORS[Math.floor(Math.random() * CONFETTI_COLORS.length)];
         const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1 });
         const mesh = new THREE.Mesh(this.geo, mat);
@@ -2437,7 +2432,6 @@ async function showOffSolve() {
     return;
   }
 
-  // Check if any cubes need solving
   const unsolved = showOffCubes.filter(c => !c.isSolved());
   if (unsolved.length === 0) {
     showSolverStatus('All cubes already solved!');
@@ -2446,30 +2440,43 @@ async function showOffSolve() {
 
   setShowOffBusy(true);
 
-  // Solve each cube (brief yield between to not freeze UI)
+  // Compute solutions one at a time with full frame yields between each
+  // (each Kociemba solve blocks the main thread for 50-500ms)
+  const total = showOffCubes.length;
+  const statusEl = document.getElementById('solver-status');
   const allSolutions = [];
-  for (const soCube of showOffCubes) {
+
+  for (let i = 0; i < total; i++) {
+    const soCube = showOffCubes[i];
     if (soCube.isSolved()) {
       allSolutions.push([]);
       continue;
     }
+
+    // Show progress so user knows it's working
+    statusEl.textContent = `Computing solutions... ${i + 1}/${total}`;
+    statusEl.style.display = 'block';
+
+    // Yield a full frame BEFORE the heavy solve call
+    await new Promise(r => requestAnimationFrame(r));
+
     try {
       const faceletStr = soCube.toFaceletString();
       const cube = Cube.fromString(faceletStr);
       const solution = cube.solve();
       allSolutions.push(parseSolution(solution || ''));
     } catch (e) {
-      console.error('Solve error:', e);
+      console.error('Solve error for cube', i, ':', e);
       allSolutions.push([]);
     }
-    // Yield to UI
-    await new Promise(r => setTimeout(r, 0));
   }
 
-  const speed = getShowOffSpeed();
-  const maxLen = Math.max(...allSolutions.map(s => s.length));
+  statusEl.style.display = 'none';
 
-  // Step through solutions in sync
+  const speed = getShowOffSpeed();
+  const maxLen = Math.max(0, ...allSolutions.map(s => s.length));
+
+  // Step through solutions in sync — all cubes animate turn i together
   for (let i = 0; i < maxLen; i++) {
     const promises = [];
     for (let c = 0; c < showOffCubes.length; c++) {
@@ -2481,12 +2488,9 @@ async function showOffSolve() {
     await Promise.all(promises);
   }
 
+  // Fire confetti then release busy
+  confettiSystem.fireFromAllCubes();
   setShowOffBusy(false);
-
-  // Fire confetti (Step 5)
-  if (typeof confettiSystem !== 'undefined' && confettiSystem) {
-    confettiSystem.fireFromAllCubes();
-  }
 }
 
 // ─── SHOW OFF: CONTINUOUS PLAY ───────────────────────────────
