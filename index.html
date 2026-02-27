@@ -1959,9 +1959,282 @@ function animateCameraToPosition(targetPos, duration = 500) {
   requestAnimationFrame(animate);
 }
 
-// Stubs — filled in by later steps
-function createShowOffGrid(n) { /* Step 3 */ }
-function clearShowOffGrid() { /* Step 3 */ }
+// ─── SHOW OFF CUBE CLASS ─────────────────────────────────────
+
+// Shared geometry for performance (all show-off cubies reuse this)
+const sharedCubieGeo = new RoundedBoxGeometry(CUBIE_SIZE, CUBIE_SIZE, CUBIE_SIZE, CORNER_SEGMENTS, CORNER_RADIUS);
+
+class ShowOffCube {
+  constructor(position) {
+    this.group = new THREE.Group();
+    this.group.position.copy(position);
+    scene.add(this.group);
+
+    this.cubies = [];
+    this.cubeState = {};
+    this.isAnimating = false;
+    this.animQueue = [];
+
+    this.initState();
+    this.buildCubies();
+  }
+
+  initState() {
+    for (const [face, code] of Object.entries(COLOR_CODE_MAP)) {
+      this.cubeState[face] = Array.from({ length: 3 }, () => Array(3).fill(code));
+    }
+  }
+
+  faceColor(x, y, z, fi) {
+    if (fi === 0 && x ===  1) return FACE_COLORS.R;
+    if (fi === 1 && x === -1) return FACE_COLORS.L;
+    if (fi === 2 && y ===  1) return FACE_COLORS.U;
+    if (fi === 3 && y === -1) return FACE_COLORS.D;
+    if (fi === 4 && z ===  1) return FACE_COLORS.F;
+    if (fi === 5 && z === -1) return FACE_COLORS.B;
+    return INTERIOR_COLOR;
+  }
+
+  buildCubies() {
+    for (let x = -1; x <= 1; x++) {
+      for (let y = -1; y <= 1; y++) {
+        for (let z = -1; z <= 1; z++) {
+          const materials = [];
+          for (let i = 0; i < 6; i++) {
+            const color = this.faceColor(x, y, z, i);
+            materials.push(new THREE.MeshStandardMaterial({
+              color,
+              roughness: color === INTERIOR_COLOR ? 0.9 : 0.35,
+              metalness: color === INTERIOR_COLOR ? 0.0 : 0.05,
+            }));
+          }
+          const mesh = new THREE.Mesh(sharedCubieGeo, materials);
+          mesh.position.set(x * STEP, y * STEP, z * STEP);
+          mesh.castShadow = false;  // perf: no shadows for show-off cubies
+          mesh.receiveShadow = false;
+          mesh.userData.pos = { x, y, z };
+          this.group.add(mesh);
+          this.cubies.push(mesh);
+        }
+      }
+    }
+  }
+
+  dispose() {
+    for (const mesh of this.cubies) {
+      mesh.material.forEach(m => m.dispose());
+      this.group.remove(mesh);
+    }
+    this.cubies.length = 0;
+    scene.remove(this.group);
+  }
+
+  getCubiesOnLayer(axis, layer) {
+    return this.cubies.filter(m => Math.round(m.userData.pos[axis]) === layer);
+  }
+
+  rotateCubeState(faceName, clockwise) {
+    const face = this.cubeState[faceName];
+    if (clockwise) {
+      const tmp = [
+        [face[2][0], face[1][0], face[0][0]],
+        [face[2][1], face[1][1], face[0][1]],
+        [face[2][2], face[1][2], face[0][2]],
+      ];
+      for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) face[r][c] = tmp[r][c];
+    } else {
+      const tmp = [
+        [face[0][2], face[1][2], face[2][2]],
+        [face[0][1], face[1][1], face[2][1]],
+        [face[0][0], face[1][0], face[2][0]],
+      ];
+      for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) face[r][c] = tmp[r][c];
+    }
+
+    // Adjacent edge rotation (same as global rotateCubeState)
+    const s = this.cubeState;
+    if (faceName === 'U') {
+      if (clockwise) {
+        const tmp = [s.F[0][0], s.F[0][1], s.F[0][2]];
+        [s.F[0][0], s.F[0][1], s.F[0][2]] = [s.R[0][0], s.R[0][1], s.R[0][2]];
+        [s.R[0][0], s.R[0][1], s.R[0][2]] = [s.B[0][0], s.B[0][1], s.B[0][2]];
+        [s.B[0][0], s.B[0][1], s.B[0][2]] = [s.L[0][0], s.L[0][1], s.L[0][2]];
+        [s.L[0][0], s.L[0][1], s.L[0][2]] = tmp;
+      } else {
+        const tmp = [s.F[0][0], s.F[0][1], s.F[0][2]];
+        [s.F[0][0], s.F[0][1], s.F[0][2]] = [s.L[0][0], s.L[0][1], s.L[0][2]];
+        [s.L[0][0], s.L[0][1], s.L[0][2]] = [s.B[0][0], s.B[0][1], s.B[0][2]];
+        [s.B[0][0], s.B[0][1], s.B[0][2]] = [s.R[0][0], s.R[0][1], s.R[0][2]];
+        [s.R[0][0], s.R[0][1], s.R[0][2]] = tmp;
+      }
+    } else if (faceName === 'D') {
+      if (clockwise) {
+        const tmp = [s.F[2][0], s.F[2][1], s.F[2][2]];
+        [s.F[2][0], s.F[2][1], s.F[2][2]] = [s.L[2][0], s.L[2][1], s.L[2][2]];
+        [s.L[2][0], s.L[2][1], s.L[2][2]] = [s.B[2][0], s.B[2][1], s.B[2][2]];
+        [s.B[2][0], s.B[2][1], s.B[2][2]] = [s.R[2][0], s.R[2][1], s.R[2][2]];
+        [s.R[2][0], s.R[2][1], s.R[2][2]] = tmp;
+      } else {
+        const tmp = [s.F[2][0], s.F[2][1], s.F[2][2]];
+        [s.F[2][0], s.F[2][1], s.F[2][2]] = [s.R[2][0], s.R[2][1], s.R[2][2]];
+        [s.R[2][0], s.R[2][1], s.R[2][2]] = [s.B[2][0], s.B[2][1], s.B[2][2]];
+        [s.B[2][0], s.B[2][1], s.B[2][2]] = [s.L[2][0], s.L[2][1], s.L[2][2]];
+        [s.L[2][0], s.L[2][1], s.L[2][2]] = tmp;
+      }
+    } else if (faceName === 'F') {
+      if (clockwise) {
+        const tmp = [s.U[2][0], s.U[2][1], s.U[2][2]];
+        [s.U[2][0], s.U[2][1], s.U[2][2]] = [s.L[2][2], s.L[1][2], s.L[0][2]];
+        [s.L[0][2], s.L[1][2], s.L[2][2]] = [s.D[0][0], s.D[0][1], s.D[0][2]];
+        [s.D[0][0], s.D[0][1], s.D[0][2]] = [s.R[2][0], s.R[1][0], s.R[0][0]];
+        [s.R[0][0], s.R[1][0], s.R[2][0]] = tmp;
+      } else {
+        const tmp = [s.U[2][0], s.U[2][1], s.U[2][2]];
+        [s.U[2][0], s.U[2][1], s.U[2][2]] = [s.R[0][0], s.R[1][0], s.R[2][0]];
+        [s.R[0][0], s.R[1][0], s.R[2][0]] = [s.D[0][2], s.D[0][1], s.D[0][0]];
+        [s.D[0][0], s.D[0][1], s.D[0][2]] = [s.L[0][2], s.L[1][2], s.L[2][2]];
+        [s.L[0][2], s.L[1][2], s.L[2][2]] = [tmp[2], tmp[1], tmp[0]];
+      }
+    } else if (faceName === 'B') {
+      if (clockwise) {
+        const tmp = [s.U[0][0], s.U[0][1], s.U[0][2]];
+        [s.U[0][0], s.U[0][1], s.U[0][2]] = [s.R[0][2], s.R[1][2], s.R[2][2]];
+        [s.R[0][2], s.R[1][2], s.R[2][2]] = [s.D[2][2], s.D[2][1], s.D[2][0]];
+        [s.D[2][0], s.D[2][1], s.D[2][2]] = [s.L[0][0], s.L[1][0], s.L[2][0]];
+        [s.L[0][0], s.L[1][0], s.L[2][0]] = [tmp[2], tmp[1], tmp[0]];
+      } else {
+        const tmp = [s.U[0][0], s.U[0][1], s.U[0][2]];
+        [s.U[0][0], s.U[0][1], s.U[0][2]] = [s.L[2][0], s.L[1][0], s.L[0][0]];
+        [s.L[0][0], s.L[1][0], s.L[2][0]] = [s.D[2][2], s.D[2][1], s.D[2][0]];
+        [s.D[2][0], s.D[2][1], s.D[2][2]] = [s.R[2][2], s.R[1][2], s.R[0][2]];
+        [s.R[0][2], s.R[1][2], s.R[2][2]] = tmp;
+      }
+    } else if (faceName === 'R') {
+      if (clockwise) {
+        const tmp = [s.U[0][2], s.U[1][2], s.U[2][2]];
+        [s.U[0][2], s.U[1][2], s.U[2][2]] = [s.F[0][2], s.F[1][2], s.F[2][2]];
+        [s.F[0][2], s.F[1][2], s.F[2][2]] = [s.D[0][2], s.D[1][2], s.D[2][2]];
+        [s.D[0][2], s.D[1][2], s.D[2][2]] = [s.B[2][0], s.B[1][0], s.B[0][0]];
+        [s.B[0][0], s.B[1][0], s.B[2][0]] = [tmp[2], tmp[1], tmp[0]];
+      } else {
+        const tmp = [s.U[0][2], s.U[1][2], s.U[2][2]];
+        [s.U[0][2], s.U[1][2], s.U[2][2]] = [s.B[2][0], s.B[1][0], s.B[0][0]];
+        [s.B[0][0], s.B[1][0], s.B[2][0]] = [s.D[2][2], s.D[1][2], s.D[0][2]];
+        [s.D[0][2], s.D[1][2], s.D[2][2]] = [s.F[0][2], s.F[1][2], s.F[2][2]];
+        [s.F[0][2], s.F[1][2], s.F[2][2]] = tmp;
+      }
+    } else if (faceName === 'L') {
+      if (clockwise) {
+        const tmp = [s.U[0][0], s.U[1][0], s.U[2][0]];
+        [s.U[0][0], s.U[1][0], s.U[2][0]] = [s.B[2][2], s.B[1][2], s.B[0][2]];
+        [s.B[0][2], s.B[1][2], s.B[2][2]] = [s.D[2][0], s.D[1][0], s.D[0][0]];
+        [s.D[0][0], s.D[1][0], s.D[2][0]] = [s.F[0][0], s.F[1][0], s.F[2][0]];
+        [s.F[0][0], s.F[1][0], s.F[2][0]] = tmp;
+      } else {
+        const tmp = [s.U[0][0], s.U[1][0], s.U[2][0]];
+        [s.U[0][0], s.U[1][0], s.U[2][0]] = [s.F[0][0], s.F[1][0], s.F[2][0]];
+        [s.F[0][0], s.F[1][0], s.F[2][0]] = [s.D[0][0], s.D[1][0], s.D[2][0]];
+        [s.D[0][0], s.D[1][0], s.D[2][0]] = [s.B[2][2], s.B[1][2], s.B[0][2]];
+        [s.B[0][2], s.B[1][2], s.B[2][2]] = [tmp[2], tmp[1], tmp[0]];
+      }
+    }
+  }
+
+  rotateFace(faceName, clockwise, duration) {
+    return new Promise(resolve => {
+      const faceInfo = FACES[faceName];
+      if (!faceInfo) { resolve(); return; }
+
+      const { axis, layer, dir } = faceInfo;
+      const angle = (clockwise ? -1 : 1) * dir * (Math.PI / 2);
+      const layerCubies = this.getCubiesOnLayer(axis, layer);
+
+      const pivot = new THREE.Group();
+      this.group.add(pivot);
+
+      for (const mesh of layerCubies) {
+        this.group.remove(mesh);
+        pivot.add(mesh);
+      }
+
+      const startTime = performance.now();
+      const self = this;
+
+      function animate(now) {
+        const elapsed = now - startTime;
+        const t = Math.min(elapsed / duration, 1);
+        const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+        if (axis === 'x') pivot.rotation.x = angle * eased;
+        if (axis === 'y') pivot.rotation.y = angle * eased;
+        if (axis === 'z') pivot.rotation.z = angle * eased;
+
+        if (t < 1) {
+          requestAnimationFrame(animate);
+        } else {
+          for (const mesh of layerCubies) {
+            pivot.updateMatrixWorld();
+            const worldMat = new THREE.Matrix4().copy(mesh.matrixWorld);
+            // Convert from world to local group space
+            const groupInv = new THREE.Matrix4().copy(self.group.matrixWorld).invert();
+            worldMat.premultiply(groupInv);
+
+            pivot.remove(mesh);
+            self.group.add(mesh);
+
+            mesh.position.setFromMatrixPosition(worldMat);
+            mesh.quaternion.setFromRotationMatrix(worldMat);
+
+            // Snap position
+            mesh.userData.pos = {
+              x: Math.round(mesh.position.x / STEP),
+              y: Math.round(mesh.position.y / STEP),
+              z: Math.round(mesh.position.z / STEP),
+            };
+            mesh.position.set(
+              mesh.userData.pos.x * STEP,
+              mesh.userData.pos.y * STEP,
+              mesh.userData.pos.z * STEP
+            );
+          }
+          self.group.remove(pivot);
+          resolve();
+        }
+      }
+      requestAnimationFrame(animate);
+    });
+  }
+
+  async doMove(faceName, clockwise, duration) {
+    this.rotateCubeState(faceName, clockwise);
+    return this.rotateFace(faceName, clockwise, duration);
+  }
+
+  toFaceletString() {
+    const colorToFacelet = { W: 'U', R: 'R', G: 'F', Y: 'D', O: 'L', B: 'B' };
+    let str = '';
+    for (const face of ['U', 'R', 'F', 'D', 'L', 'B']) {
+      for (let r = 0; r < 3; r++) {
+        for (let c = 0; c < 3; c++) {
+          str += colorToFacelet[this.cubeState[face][r][c]];
+        }
+      }
+    }
+    return str;
+  }
+
+  isSolved() {
+    for (const face of ['U', 'D', 'F', 'B', 'R', 'L']) {
+      const center = this.cubeState[face][1][1];
+      for (let r = 0; r < 3; r++) {
+        for (let c = 0; c < 3; c++) {
+          if (this.cubeState[face][r][c] !== center) return false;
+        }
+      }
+    }
+    return true;
+  }
+}
 
 // Wire showoff buttons
 document.getElementById('btn-showoff').addEventListener('click', enterShowOffMode);
