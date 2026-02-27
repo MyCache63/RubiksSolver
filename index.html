@@ -356,6 +356,47 @@ canvas {
   gap: 4px;
   cursor: pointer;
 }
+
+/* Debug log panel */
+#debug-log {
+  display: none;
+  position: fixed;
+  top: 52px;
+  left: 8px;
+  width: 320px;
+  max-height: 45vh;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.85);
+  border: 1px solid rgba(99, 102, 241, 0.4);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #0f0;
+  z-index: 300;
+  word-wrap: break-word;
+}
+
+#debug-log.visible { display: block; }
+
+#debug-log-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(255,255,255,0.15);
+}
+
+#debug-log-header button {
+  background: rgba(255,255,255,0.1);
+  border: 1px solid rgba(255,255,255,0.2);
+  color: #fff;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
 </style>
 </head>
 <body>
@@ -375,6 +416,17 @@ canvas {
 </div>
 
 <div id="canvas-container"></div>
+
+<div id="debug-log">
+  <div id="debug-log-header">
+    <span>Debug Log</span>
+    <div>
+      <button id="debug-copy">Copy</button>
+      <button id="debug-clear">Clear</button>
+    </div>
+  </div>
+  <div id="debug-log-content"></div>
+</div>
 
 <div id="info-overlay">
   <div id="move-count">Moves: 0</div>
@@ -426,6 +478,7 @@ canvas {
   <div id="showoff-actions">
     <button class="btn btn-primary" id="so-scramble">Scramble All</button>
     <select class="btn speed-select" id="so-speed">
+      <option value="400">Slow</option>
       <option value="200">Medium</option>
       <option value="80" selected>Fast</option>
       <option value="1">Instant</option>
@@ -451,6 +504,34 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import Cube from 'cubejs';
+
+// ─── DEBUG LOG ───────────────────────────────────────────────
+
+const debugLogEl = document.getElementById('debug-log-content');
+const debugLogPanel = document.getElementById('debug-log');
+let debugLines = [];
+
+function debugLog(msg) {
+  const ts = ((performance.now() / 1000) | 0) + '.' +
+    String(Math.round(performance.now()) % 1000).padStart(3, '0');
+  const line = `[${ts}] ${msg}`;
+  debugLines.push(line);
+  if (debugLines.length > 200) debugLines.shift();
+  debugLogEl.textContent = debugLines.join('\n');
+  debugLogEl.parentElement.scrollTop = debugLogEl.parentElement.scrollHeight;
+  console.log('[SO]', msg);
+}
+
+document.getElementById('debug-copy').addEventListener('click', () => {
+  navigator.clipboard.writeText(debugLines.join('\n')).then(
+    () => debugLog('(copied to clipboard)'),
+    () => debugLog('(clipboard copy failed)')
+  );
+});
+document.getElementById('debug-clear').addEventListener('click', () => {
+  debugLines = [];
+  debugLogEl.textContent = '';
+});
 
 // ─── CONSTANTS ───────────────────────────────────────────────
 
@@ -1896,12 +1977,15 @@ function enterShowOffMode() {
   cubieGroup.visible = false;
   faceLabelGroup.visible = false;
 
-  // Show showoff bar
+  // Show showoff bar + debug log
   document.getElementById('showoff-bar').classList.add('visible');
+  debugLogPanel.classList.add('visible');
 
   // Hide show off button, show nothing special in top bar
   document.getElementById('btn-showoff').style.display = 'none';
   document.getElementById('btn-toggle-face-controls').style.display = 'none';
+
+  debugLog('Entered show-off mode');
 
   // Build default 3×3 grid
   createShowOffGrid(3);
@@ -1926,8 +2010,9 @@ function exitShowOffMode() {
   cubieGroup.visible = true;
   faceLabelGroup.visible = true;
 
-  // Hide showoff bar
+  // Hide showoff bar + debug log
   document.getElementById('showoff-bar').classList.remove('visible');
+  debugLogPanel.classList.remove('visible');
 
   // Restore buttons
   document.getElementById('btn-showoff').style.display = '';
@@ -2240,6 +2325,7 @@ let currentGridSize = 3;
 function createShowOffGrid(n) {
   clearShowOffGrid();
   currentGridSize = n;
+  debugLog(`Creating ${n}x${n} grid (${n*n} cubes)`);
 
   document.querySelectorAll('.grid-btn').forEach(btn => {
     btn.classList.toggle('active', parseInt(btn.dataset.grid) === n);
@@ -2256,6 +2342,7 @@ function createShowOffGrid(n) {
     }
   }
 
+  debugLog(`Grid created: ${showOffCubes.length} cubes, ${showOffCubes.length * 27} cubies`);
   zoomCameraToFitGrid(n);
 }
 
@@ -2400,17 +2487,15 @@ function setShowOffBusy(busy) {
 async function showOffScramble() {
   if (showOffBusy || showOffCubes.length === 0) return;
   setShowOffBusy(true);
+  debugLog(`Scramble: ${showOffCubes.length} cubes, speed=${getShowOffSpeed()}`);
 
   const speed = getShowOffSpeed();
   const scrambleLength = 20;
 
-  // Generate independent scrambles for each cube
   const allScrambles = showOffCubes.map(() => generateScramble(scrambleLength));
-
-  // Find max length (some scrambles may have double-moves making them longer)
   const maxLen = Math.max(...allScrambles.map(s => s.length));
+  debugLog(`Scramble: maxLen=${maxLen} moves`);
 
-  // Animate turn-by-turn in sync
   for (let i = 0; i < maxLen; i++) {
     const promises = [];
     for (let c = 0; c < showOffCubes.length; c++) {
@@ -2422,6 +2507,7 @@ async function showOffScramble() {
     await Promise.all(promises);
   }
 
+  debugLog('Scramble complete');
   setShowOffBusy(false);
 }
 
@@ -2429,19 +2515,20 @@ async function showOffSolve() {
   if (showOffBusy || showOffCubes.length === 0) return;
   if (!solverReady) {
     showSolverStatus('Solver still loading...');
+    debugLog('Solve: solver not ready');
     return;
   }
 
   const unsolved = showOffCubes.filter(c => !c.isSolved());
   if (unsolved.length === 0) {
     showSolverStatus('All cubes already solved!');
+    debugLog('Solve: all already solved');
     return;
   }
 
   setShowOffBusy(true);
+  debugLog(`Solve: starting, ${showOffCubes.length} cubes, ${unsolved.length} unsolved`);
 
-  // Compute solutions one at a time with full frame yields between each
-  // (each Kociemba solve blocks the main thread for 50-500ms)
   const total = showOffCubes.length;
   const statusEl = document.getElementById('solver-status');
   const allSolutions = [];
@@ -2450,23 +2537,30 @@ async function showOffSolve() {
     const soCube = showOffCubes[i];
     if (soCube.isSolved()) {
       allSolutions.push([]);
+      debugLog(`Cube ${i}: already solved`);
       continue;
     }
 
-    // Show progress so user knows it's working
     statusEl.textContent = `Computing solutions... ${i + 1}/${total}`;
     statusEl.style.display = 'block';
 
     // Yield a full frame BEFORE the heavy solve call
     await new Promise(r => requestAnimationFrame(r));
 
+    const t0 = performance.now();
     try {
       const faceletStr = soCube.toFaceletString();
+      debugLog(`Cube ${i}: facelet=${faceletStr}`);
       const cube = Cube.fromString(faceletStr);
+      debugLog(`Cube ${i}: calling solve()...`);
       const solution = cube.solve();
-      allSolutions.push(parseSolution(solution || ''));
+      const elapsed = (performance.now() - t0).toFixed(0);
+      const moves = parseSolution(solution || '');
+      debugLog(`Cube ${i}: solved in ${elapsed}ms, ${moves.length} moves: ${solution}`);
+      allSolutions.push(moves);
     } catch (e) {
-      console.error('Solve error for cube', i, ':', e);
+      const elapsed = (performance.now() - t0).toFixed(0);
+      debugLog(`Cube ${i}: ERROR after ${elapsed}ms: ${e.message}`);
       allSolutions.push([]);
     }
   }
@@ -2475,21 +2569,30 @@ async function showOffSolve() {
 
   const speed = getShowOffSpeed();
   const maxLen = Math.max(0, ...allSolutions.map(s => s.length));
+  debugLog(`Solve: all computed, maxLen=${maxLen}, speed=${speed}ms, starting animation`);
 
   // Step through solutions in sync — all cubes animate turn i together
-  for (let i = 0; i < maxLen; i++) {
-    const promises = [];
-    for (let c = 0; c < showOffCubes.length; c++) {
-      if (i < allSolutions[c].length) {
-        const move = allSolutions[c][i];
-        promises.push(showOffCubes[c].doMove(move.face, move.clockwise, speed));
+  try {
+    for (let i = 0; i < maxLen; i++) {
+      if (i % 5 === 0) debugLog(`Animate step ${i}/${maxLen}`);
+      const promises = [];
+      for (let c = 0; c < showOffCubes.length; c++) {
+        if (i < allSolutions[c].length) {
+          const move = allSolutions[c][i];
+          promises.push(showOffCubes[c].doMove(move.face, move.clockwise, speed));
+        }
       }
+      await Promise.all(promises);
     }
-    await Promise.all(promises);
+    debugLog('Solve: animation complete');
+  } catch (e) {
+    debugLog(`Solve: ANIMATION ERROR: ${e.message}`);
+    console.error('Solve animation error:', e);
   }
 
   // Fire confetti then release busy
   confettiSystem.fireFromAllCubes();
+  debugLog('Solve: confetti fired, done');
   setShowOffBusy(false);
 }
 
