@@ -364,29 +364,22 @@ canvas {
   top: 52px;
   left: 8px;
   width: 320px;
-  max-height: 45vh;
-  overflow-y: auto;
-  background: rgba(0, 0, 0, 0.85);
-  border: 1px solid rgba(99, 102, 241, 0.4);
-  border-radius: 8px;
-  padding: 6px 8px;
-  font-family: 'Courier New', monospace;
-  font-size: 11px;
-  line-height: 1.4;
-  color: #0f0;
   z-index: 300;
-  word-wrap: break-word;
 }
 
-#debug-log.visible { display: block; }
+#debug-log.visible { display: flex; flex-direction: column; }
 
 #debug-log-header {
   display: flex;
   justify-content: space-between;
-  margin-bottom: 4px;
-  padding-bottom: 4px;
-  border-bottom: 1px solid rgba(255,255,255,0.15);
+  background: rgba(0, 0, 0, 0.9);
+  border: 1px solid rgba(99, 102, 241, 0.4);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  padding: 4px 8px;
 }
+
+#debug-log-header span { color: #0f0; font-size: 11px; }
 
 #debug-log-header button {
   background: rgba(255,255,255,0.1);
@@ -396,6 +389,22 @@ canvas {
   padding: 2px 6px;
   border-radius: 4px;
   cursor: pointer;
+}
+
+#debug-log-content {
+  width: 100%;
+  height: 35vh;
+  background: rgba(0, 0, 0, 0.9);
+  border: 1px solid rgba(99, 102, 241, 0.4);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  padding: 4px 8px;
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #0f0;
+  resize: none;
+  outline: none;
 }
 </style>
 </head>
@@ -425,7 +434,7 @@ canvas {
       <button id="debug-clear">Clear</button>
     </div>
   </div>
-  <div id="debug-log-content"></div>
+  <textarea id="debug-log-content" readonly></textarea>
 </div>
 
 <div id="info-overlay">
@@ -517,20 +526,19 @@ function debugLog(msg) {
   const line = `[${ts}] ${msg}`;
   debugLines.push(line);
   if (debugLines.length > 200) debugLines.shift();
-  debugLogEl.textContent = debugLines.join('\n');
-  debugLogEl.parentElement.scrollTop = debugLogEl.parentElement.scrollHeight;
+  debugLogEl.value = debugLines.join('\n');
+  debugLogEl.scrollTop = debugLogEl.scrollHeight;
   console.log('[SO]', msg);
 }
 
 document.getElementById('debug-copy').addEventListener('click', () => {
-  navigator.clipboard.writeText(debugLines.join('\n')).then(
-    () => debugLog('(copied to clipboard)'),
-    () => debugLog('(clipboard copy failed)')
-  );
+  debugLogEl.select();
+  document.execCommand('copy');
+  debugLog('(copied)');
 });
 document.getElementById('debug-clear').addEventListener('click', () => {
   debugLines = [];
-  debugLogEl.textContent = '';
+  debugLogEl.value = '';
 });
 
 // ─── CONSTANTS ───────────────────────────────────────────────
@@ -2529,6 +2537,9 @@ async function showOffSolve() {
   setShowOffBusy(true);
   debugLog(`Solve: starting, ${showOffCubes.length} cubes, ${unsolved.length} unsolved`);
 
+  // Yield so the "starting" message actually paints to screen
+  await new Promise(r => setTimeout(r, 50));
+
   const total = showOffCubes.length;
   const statusEl = document.getElementById('solver-status');
   const allSolutions = [];
@@ -2541,26 +2552,34 @@ async function showOffSolve() {
       continue;
     }
 
-    statusEl.textContent = `Computing solutions... ${i + 1}/${total}`;
+    statusEl.textContent = `Computing... ${i + 1}/${total}`;
     statusEl.style.display = 'block';
+    debugLog(`Cube ${i}: computing...`);
 
-    // Yield a full frame BEFORE the heavy solve call
-    await new Promise(r => requestAnimationFrame(r));
-
+    // Run solve in its own macro-task via setTimeout.
+    // This ensures the browser paints our debug messages + status overlay
+    // BEFORE the synchronous cube.solve() blocks the thread.
     const t0 = performance.now();
-    try {
-      const faceletStr = soCube.toFaceletString();
-      debugLog(`Cube ${i}: facelet=${faceletStr}`);
-      const cube = Cube.fromString(faceletStr);
-      debugLog(`Cube ${i}: calling solve()...`);
-      const solution = cube.solve();
-      const elapsed = (performance.now() - t0).toFixed(0);
-      const moves = parseSolution(solution || '');
-      debugLog(`Cube ${i}: solved in ${elapsed}ms, ${moves.length} moves: ${solution}`);
+    const result = await new Promise(resolve => {
+      setTimeout(() => {
+        try {
+          const faceletStr = soCube.toFaceletString();
+          const cube = Cube.fromString(faceletStr);
+          const solution = cube.solve();
+          resolve({ ok: true, solution, faceletStr });
+        } catch (e) {
+          resolve({ ok: false, error: e.message });
+        }
+      }, 50);
+    });
+
+    const elapsed = (performance.now() - t0).toFixed(0);
+    if (result.ok) {
+      const moves = parseSolution(result.solution || '');
+      debugLog(`Cube ${i}: ${elapsed}ms, ${moves.length} moves [${result.faceletStr}]`);
       allSolutions.push(moves);
-    } catch (e) {
-      const elapsed = (performance.now() - t0).toFixed(0);
-      debugLog(`Cube ${i}: ERROR after ${elapsed}ms: ${e.message}`);
+    } else {
+      debugLog(`Cube ${i}: ERROR ${elapsed}ms: ${result.error}`);
       allSolutions.push([]);
     }
   }
