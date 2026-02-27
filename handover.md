@@ -8,7 +8,7 @@
 
 ## Current State
 
-Phase 1 + Phase 2A implemented in `index.html` (~1833 lines). Single HTML file with:
+Phase 1 + Phase 2A + Show Off Mode implemented in `index.html` (~2592 lines). Single HTML file with:
 
 ### Working Features
 - **3D rendering** — Three.js with rounded cubelets, proper lighting, shadows, dark theme
@@ -29,11 +29,21 @@ Phase 1 + Phase 2A implemented in `index.html` (~1833 lines). Single HTML file w
 - **Kociemba solver** — cubejs library loaded from CDN, initializes on page load (~4-5 sec)
 - **Solution playback** — Step forward/back, play/pause auto-advance, move token display with highlighting
 - **Guard rails** — Manual moves blocked during solution playback
+- **Show Off Mode** — Multi-cube grid display (1×1 to 5×5) with:
+  - Grid preset buttons (1, 2×2, 3×3, 4×4, 5×5)
+  - Scramble All — synchronized turn-by-turn scrambling across all cubes
+  - Solve All — synchronized solving with Kociemba algorithm
+  - Confetti — particle physics burst from all cube faces on solve completion
+  - Continuous play — checkbox that auto-loops scramble → solve → confetti → wait → repeat
+  - Own speed selector (Medium/Fast/Instant)
+  - Camera auto-zooms to fit grid
+  - Normal mode completely isolated — enter/exit cleanly
 
 ### UI Layout
-- Top bar: logo + Controls toggle + Help button
+- Top bar: logo + Controls toggle + Show Off button + Help button
 - Center: 3D cube (full screen behind UI)
 - Bottom bar: Undo/Redo/Reset + Scramble/Speed/Solve/Flip buttons + solution bar (when solving) + toggleable face controls
+- Show-off bar (replaces bottom bar in show-off mode): Grid buttons + Scramble All/Speed/Solve All + Continuous toggle + Exit
 - Solver status overlay: centered messages that auto-hide
 
 ---
@@ -48,7 +58,7 @@ Phase 1 + Phase 2A implemented in `index.html` (~1833 lines). Single HTML file w
 
 ## What's After That (Phase 3 — Polish)
 
-6. Sound effects + confetti on solve
+6. Sound effects on moves/solve
 7. Timer mode
 8. Pattern library (checkerboard, etc.)
 9. Color palette switching
@@ -61,6 +71,7 @@ Phase 1 + Phase 2A implemented in `index.html` (~1833 lines). Single HTML file w
 
 - cubejs solver init takes ~4-5 seconds — button shows "Solve (loading...)" until ready
 - Solver runs on main thread — may cause brief freeze on complex solves (Web Worker planned for 2B)
+- Show Off with 5×5 (25 cubes, 675 cubies) may be slow on older phones — needs device testing
 - Dynamic face mapping uses `camera.up` vector — works correctly with OrbitControls but if camera flips upside-down the mapping may be unexpected
 - Up/Down arrow keys tilt 30° (not 90°) to avoid camera flip issues
 - Cube state tracking and 3D visual state are maintained separately — both update on each move, but no sync-check exists yet
@@ -96,3 +107,4 @@ Phase 1 + Phase 2A implemented in `index.html` (~1833 lines). Single HTML file w
 - `before-initial-build-feb27` — Before any code was written
 - `before-dynamic-controls-feb27` — Before adding dynamic controls, speed selector, arrow keys, snap view
 - `before-phase2a-feb27` — Before Phase 2A (solver + whole-cube rotation)
+- `before-showoff-mode-feb27` — Before Show Off mode implementation
