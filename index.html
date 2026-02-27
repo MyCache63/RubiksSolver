@@ -2236,6 +2236,55 @@ class ShowOffCube {
   }
 }
 
+// ─── SHOW OFF GRID & CAMERA ──────────────────────────────────
+
+const GRID_CELL = 3 * STEP + 1.5;
+let currentGridSize = 3;
+
+function createShowOffGrid(n) {
+  clearShowOffGrid();
+  currentGridSize = n;
+
+  document.querySelectorAll('.grid-btn').forEach(btn => {
+    btn.classList.toggle('active', parseInt(btn.dataset.grid) === n);
+  });
+
+  const offset = (n - 1) * GRID_CELL / 2;
+
+  for (let row = 0; row < n; row++) {
+    for (let col = 0; col < n; col++) {
+      const x = col * GRID_CELL - offset;
+      const z = row * GRID_CELL - offset;
+      const cube = new ShowOffCube(new THREE.Vector3(x, 0, z));
+      showOffCubes.push(cube);
+    }
+  }
+
+  zoomCameraToFitGrid(n);
+}
+
+function clearShowOffGrid() {
+  for (const cube of showOffCubes) cube.dispose();
+  showOffCubes.length = 0;
+}
+
+function zoomCameraToFitGrid(n) {
+  const fovRad = (camera.fov * Math.PI) / 180;
+  const gridSpan = n * GRID_CELL;
+  const dist = Math.max((gridSpan / 2) / Math.tan(fovRad / 2) * 1.4, 6);
+  const targetPos = new THREE.Vector3(dist * 0.5, dist * 0.7, dist * 0.5);
+  orbitControls.maxDistance = dist * 2;
+  animateCameraToPosition(targetPos, 600);
+}
+
+// Wire grid preset buttons
+document.querySelectorAll('.grid-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (showOffBusy) return;
+    createShowOffGrid(parseInt(btn.dataset.grid));
+  });
+});
+
 // Wire showoff buttons
 document.getElementById('btn-showoff').addEventListener('click', enterShowOffMode);
 document.getElementById('so-exit').addEventListener('click', exitShowOffMode);
