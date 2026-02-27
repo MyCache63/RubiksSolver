@@ -128,6 +128,20 @@ canvas {
   display: flex;
 }
 
+.speed-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background: rgba(255, 255, 255, 0.08) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E") no-repeat right 10px center;
+  padding-right: 28px;
+  color: #e0e0e0;
+  font-size: 13px;
+}
+
+.speed-select option {
+  background: #1a1a2e;
+  color: #e0e0e0;
+}
+
 .face-btn {
   background: rgba(255, 255, 255, 0.06);
   color: #e0e0e0;
@@ -230,6 +244,12 @@ canvas {
   </div>
   <div id="action-buttons">
     <button class="btn btn-primary" id="btn-scramble">Scramble</button>
+    <select class="btn speed-select" id="speed-select" title="Animation speed">
+      <option value="400">Slow</option>
+      <option value="200" selected>Medium</option>
+      <option value="80">Fast</option>
+      <option value="1">Instant</option>
+    </select>
     <button class="btn btn-primary" id="btn-solve">Solve</button>
   </div>
   <div id="face-controls">
@@ -279,6 +299,56 @@ const FACES = {
   F: { axis: 'z', layer:  1, dir:  1 },
   B: { axis: 'z', layer: -1, dir: -1 },
 };
+
+// ─── DYNAMIC FACE MAPPING ────────────────────────────────────
+// Maps relative directions (Front, Right, Up, etc.) to physical faces
+// based on where the camera is looking. This makes F/R/L/U/D/B keyboard
+// controls work like holding a real cube — "Front" is whatever face
+// you're looking at.
+
+const FACE_NORMALS = {
+  R: new THREE.Vector3( 1,  0,  0),
+  L: new THREE.Vector3(-1,  0,  0),
+  U: new THREE.Vector3( 0,  1,  0),
+  D: new THREE.Vector3( 0, -1,  0),
+  F: new THREE.Vector3( 0,  0,  1),
+  B: new THREE.Vector3( 0,  0, -1),
+};
+
+function getViewFaces() {
+  // Camera direction: from camera toward origin (the cube center)
+  const camDir = camera.position.clone().negate().normalize();
+  // Camera up vector
+  const camUp = camera.up.clone().normalize();
+  // Camera right vector
+  const camRight = new THREE.Vector3().crossVectors(camDir, camUp).normalize();
+
+  // Find which physical face best matches each view direction
+  function bestFace(dir) {
+    let best = null, bestDot = -2;
+    for (const [name, normal] of Object.entries(FACE_NORMALS)) {
+      const d = dir.dot(normal);
+      if (d > bestDot) { bestDot = d; best = name; }
+    }
+    return best;
+  }
+
+  const front = bestFace(camDir);       // face we're looking at
+  const up = bestFace(camUp);           // face on top
+  const right = bestFace(camRight);     // face on our right
+
+  // Opposites
+  const OPPOSITE = { R: 'L', L: 'R', U: 'D', D: 'U', F: 'B', B: 'F' };
+
+  return {
+    F: front,
+    B: OPPOSITE[front],
+    U: up,
+    D: OPPOSITE[up],
+    R: right,
+    L: OPPOSITE[right],
+  };
+}
 
 // ─── THREE.JS SETUP ──────────────────────────────────────────
 
@@ -732,11 +802,16 @@ function generateScramble(length = 20) {
   return moves;
 }
 
+function getAnimSpeed() {
+  return parseInt(document.getElementById('speed-select').value, 10);
+}
+
 async function scramble() {
   if (isAnimating) return;
+  const speed = getAnimSpeed();
   const moves = generateScramble(20);
   for (const move of moves) {
-    await doMove(move.face, move.clockwise, true, 80);
+    await doMove(move.face, move.clockwise, true, speed);
   }
 }
 
@@ -884,16 +959,128 @@ renderer.domElement.addEventListener('pointerup', onPointerUp);
 renderer.domElement.addEventListener('touchstart', onPointerDown, { passive: true });
 renderer.domElement.addEventListener('touchend', onPointerUp, { passive: true });
 
+// ─── CAMERA ROTATION (ARROW KEYS & SNAP) ────────────────────
+
+let isCameraAnimating = false;
+
+function animateCameraRotation(axis, angle, duration = 300) {
+  if (isCameraAnimating) return;
+  isCameraAnimating = true;
+
+  const startPos = camera.position.clone();
+  const q = new THREE.Quaternion().setFromAxisAngle(axis, angle);
+  const endPos = startPos.clone().applyQuaternion(q);
+
+  const startTime = performance.now();
+  function animate(now) {
+    const t = Math.min((now - startTime) / duration, 1);
+    const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    camera.position.lerpVectors(startPos, endPos, eased);
+    camera.lookAt(0, 0, 0);
+    if (t < 1) {
+      requestAnimationFrame(animate);
+    } else {
+      camera.position.copy(endPos);
+      camera.lookAt(0, 0, 0);
+      isCameraAnimating = false;
+    }
+  }
+  requestAnimationFrame(animate);
+}
+
+function snapToNearestCorner(duration = 400) {
+  if (isCameraAnimating) return;
+  isCameraAnimating = true;
+
+  const dist = camera.position.length();
+  const norm = camera.position.clone().normalize();
+
+  // 8 corner viewing positions (all combos of ±1,±1,±1 normalized)
+  const corners = [];
+  for (const sx of [-1, 1]) {
+    for (const sy of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        corners.push(new THREE.Vector3(sx, sy, sz).normalize());
+      }
+    }
+  }
+
+  // Find nearest corner by dot product (highest = closest direction)
+  let bestCorner = corners[0];
+  let bestDot = -2;
+  for (const c of corners) {
+    const d = norm.dot(c);
+    if (d > bestDot) { bestDot = d; bestCorner = c; }
+  }
+
+  const startPos = camera.position.clone();
+  const endPos = bestCorner.clone().multiplyScalar(dist);
+
+  const startTime = performance.now();
+  function animate(now) {
+    const t = Math.min((now - startTime) / duration, 1);
+    const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    camera.position.lerpVectors(startPos, endPos, eased);
+    camera.lookAt(0, 0, 0);
+    if (t < 1) {
+      requestAnimationFrame(animate);
+    } else {
+      camera.position.copy(endPos);
+      camera.lookAt(0, 0, 0);
+      isCameraAnimating = false;
+    }
+  }
+  requestAnimationFrame(animate);
+}
+
 // ─── KEYBOARD CONTROLS ──────────────────────────────────────
 
 document.addEventListener('keydown', (e) => {
+  // Arrow keys — rotate camera view (always available, even during cube animation)
+  if (e.key === 'ArrowLeft') {
+    e.preventDefault();
+    animateCameraRotation(new THREE.Vector3(0, 1, 0), Math.PI / 2);
+    return;
+  }
+  if (e.key === 'ArrowRight') {
+    e.preventDefault();
+    animateCameraRotation(new THREE.Vector3(0, 1, 0), -Math.PI / 2);
+    return;
+  }
+  if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    // Rotate around the camera's local X axis (horizontal axis perpendicular to view)
+    const right = new THREE.Vector3();
+    camera.getWorldDirection(right);
+    right.cross(camera.up).normalize();
+    animateCameraRotation(right, Math.PI / 6); // 30° to avoid flipping
+    return;
+  }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    const right = new THREE.Vector3();
+    camera.getWorldDirection(right);
+    right.cross(camera.up).normalize();
+    animateCameraRotation(right, -Math.PI / 6);
+    return;
+  }
+  // Spacebar — snap to nearest clean 3-face view
+  if (e.key === ' ') {
+    e.preventDefault();
+    snapToNearestCorner();
+    return;
+  }
+
   if (isAnimating) return;
   const key = e.key.toUpperCase();
   const clockwise = !e.shiftKey;
 
   if (FACES[key]) {
     e.preventDefault();
-    queueMove(key, clockwise);
+    // Map the relative face key to the physical face based on camera view
+    const viewMap = getViewFaces();
+    const physicalFace = viewMap[key] || key;
+    queueMove(physicalFace, clockwise);
   }
   if (e.key === 'z' && (e.ctrlKey || e.metaKey)) {
     e.preventDefault();
@@ -905,22 +1092,46 @@ document.addEventListener('keydown', (e) => {
 // ─── BUTTON CONTROLS ─────────────────────────────────────────
 
 const faceControlsDiv = document.getElementById('face-controls');
-for (const face of FACE_NAMES) {
+const RELATIVE_LABELS = { F: 'Front', B: 'Back', U: 'Up', D: 'Down', R: 'Right', L: 'Left' };
+const RELATIVE_FACES = ['F', 'B', 'U', 'D', 'R', 'L'];
+const faceButtons = []; // track buttons for label updates
+
+for (const rel of RELATIVE_FACES) {
   const cwBtn = document.createElement('button');
   cwBtn.className = 'face-btn';
-  cwBtn.textContent = face;
-  cwBtn.title = `${face} clockwise`;
-  cwBtn.addEventListener('click', () => queueMove(face, true));
+  cwBtn.textContent = rel;
+  cwBtn.title = `${RELATIVE_LABELS[rel]} clockwise`;
+  cwBtn.addEventListener('click', () => {
+    const phys = getViewFaces()[rel];
+    queueMove(phys, true);
+  });
 
   const ccwBtn = document.createElement('button');
   ccwBtn.className = 'face-btn';
-  ccwBtn.textContent = face + "'";
-  ccwBtn.title = `${face} counter-clockwise`;
-  ccwBtn.addEventListener('click', () => queueMove(face, false));
+  ccwBtn.textContent = rel + "'";
+  ccwBtn.title = `${RELATIVE_LABELS[rel]} counter-clockwise`;
+  ccwBtn.addEventListener('click', () => {
+    const phys = getViewFaces()[rel];
+    queueMove(phys, false);
+  });
 
   faceControlsDiv.appendChild(cwBtn);
   faceControlsDiv.appendChild(ccwBtn);
+  faceButtons.push({ rel, cwBtn, ccwBtn });
 }
+
+// Update face button tooltips to show which physical face they map to
+function updateFaceButtonLabels() {
+  const viewMap = getViewFaces();
+  for (const { rel, cwBtn, ccwBtn } of faceButtons) {
+    const phys = viewMap[rel];
+    cwBtn.title = `${RELATIVE_LABELS[rel]} (${phys}) clockwise`;
+    ccwBtn.title = `${RELATIVE_LABELS[rel]} (${phys}) counter-clockwise`;
+  }
+}
+
+// Update labels periodically (camera may have moved)
+setInterval(updateFaceButtonLabels, 500);
 
 document.getElementById('btn-toggle-face-controls').addEventListener('click', () => {
   faceControlsDiv.classList.toggle('visible');
@@ -938,11 +1149,18 @@ document.getElementById('btn-solve').addEventListener('click', () => {
 
 document.getElementById('btn-help').addEventListener('click', () => {
   alert(
-    'Keyboard Controls:\n\n' +
-    'R, L, U, D, F, B — Rotate face clockwise\n' +
+    'Face Controls (camera-relative):\n\n' +
+    'F, R, L, U, D, B — Rotate face clockwise\n' +
     'Shift + key — Counter-clockwise\n' +
+    '  (F = face you\'re looking at, R = right side, etc.)\n\n' +
+    'Camera Controls:\n' +
+    'Arrow Left/Right — Rotate view horizontally\n' +
+    'Arrow Up/Down — Tilt view vertically\n' +
+    'Spacebar — Snap to nearest 3-face view\n\n' +
+    'Other:\n' +
     'Ctrl/Cmd + Z — Undo\n' +
-    'Ctrl/Cmd + Shift + Z — Redo\n\n' +
+    'Ctrl/Cmd + Shift + Z — Redo\n' +
+    'Speed dropdown — Controls scramble/solve speed\n\n' +
     'Mouse/Touch:\n' +
     'Click & drag on a face to rotate it\n' +
     'Click & drag empty space to orbit\n' +
