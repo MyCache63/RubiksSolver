@@ -251,6 +251,7 @@ canvas {
       <option value="1">Instant</option>
     </select>
     <button class="btn btn-primary" id="btn-solve">Solve</button>
+    <button class="btn" id="btn-flip" title="Flip cube upside-down (x2)">Flip</button>
   </div>
   <div id="face-controls">
     <!-- Filled by JS -->
@@ -813,6 +814,186 @@ function faceColorFromState(x, y, z, faceIndex) {
   return INTERIOR_COLOR;
 }
 
+// ─── WHOLE-CUBE ROTATION (X / Y / Z) ────────────────────────
+
+function rotateCubeStateWhole(axis, clockwise) {
+  // Whole-cube rotation remaps ALL 6 faces.
+  // X = around R-L axis, Y = around U-D axis, Z = around F-B axis
+  const s = cubeState;
+
+  // Helper: rotate a 3x3 face grid 90° clockwise
+  function rotFaceCW(face) {
+    const f = s[face];
+    const tmp = [
+      [f[2][0], f[1][0], f[0][0]],
+      [f[2][1], f[1][1], f[0][1]],
+      [f[2][2], f[1][2], f[0][2]],
+    ];
+    for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) f[r][c] = tmp[r][c];
+  }
+  function rotFaceCCW(face) {
+    const f = s[face];
+    const tmp = [
+      [f[0][2], f[1][2], f[2][2]],
+      [f[0][1], f[1][1], f[2][1]],
+      [f[0][0], f[1][0], f[2][0]],
+    ];
+    for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) f[r][c] = tmp[r][c];
+  }
+  function rotFace180(face) { rotFaceCW(face); rotFaceCW(face); }
+  // Copy a full face grid
+  function copyFace(face) { return s[face].map(row => [...row]); }
+
+  if (axis === 'y') {
+    // Y rotation (clockwise looking down from top = F→R→B→L→F)
+    if (clockwise) {
+      const tmpF = copyFace('F');
+      s.F = s.R.map(r => [...r]);
+      s.R = s.B.map(r => [...r]);
+      s.B = s.L.map(r => [...r]);
+      s.L = tmpF.map(r => [...r]);
+      rotFaceCW('U');
+      rotFaceCCW('D');
+    } else {
+      const tmpF = copyFace('F');
+      s.F = s.L.map(r => [...r]);
+      s.L = s.B.map(r => [...r]);
+      s.B = s.R.map(r => [...r]);
+      s.R = tmpF.map(r => [...r]);
+      rotFaceCCW('U');
+      rotFaceCW('D');
+    }
+  } else if (axis === 'x') {
+    // X rotation (clockwise looking from R side = U→F→D→B→U)
+    // B face is stored mirrored relative to others, so need special handling
+    if (clockwise) {
+      const tmpU = copyFace('U');
+      s.U = s.F.map(r => [...r]);
+      s.F = s.D.map(r => [...r]);
+      // D→B: need to flip both row and col order
+      s.D = s.B.map(r => [...r]);
+      rotFace180('D');
+      // tmpU→B: need to flip both row and col order
+      s.B = tmpU.map(r => [...r]);
+      rotFace180('B');
+      rotFaceCW('R');
+      rotFaceCCW('L');
+    } else {
+      const tmpU = copyFace('U');
+      // B→U: flip both
+      s.U = s.B.map(r => [...r]);
+      rotFace180('U');
+      s.B = s.D.map(r => [...r]);
+      rotFace180('B');
+      s.D = s.F.map(r => [...r]);
+      s.F = tmpU.map(r => [...r]);
+      rotFaceCCW('R');
+      rotFaceCW('L');
+    }
+  } else if (axis === 'z') {
+    // Z rotation (clockwise looking at F face = U→R→D→L→U)
+    // Need to rotate the face grids as they transfer between horizontal/vertical orientations
+    if (clockwise) {
+      const tmpU = copyFace('U');
+      // L→U: rotate the grid CW
+      s.U = s.L.map(r => [...r]); rotFaceCW('U');
+      // D→L: rotate the grid CW
+      s.L = s.D.map(r => [...r]); rotFaceCW('L');
+      // R→D: rotate the grid CW
+      s.D = s.R.map(r => [...r]); rotFaceCW('D');
+      // tmpU→R: rotate CW
+      s.R = tmpU.map(r => [...r]); rotFaceCW('R');
+      rotFaceCW('F');
+      rotFaceCCW('B');
+    } else {
+      const tmpU = copyFace('U');
+      // R→U: rotate CCW
+      s.U = s.R.map(r => [...r]); rotFaceCCW('U');
+      // D→R: rotate CCW
+      s.R = s.D.map(r => [...r]); rotFaceCCW('R');
+      // L→D: rotate CCW
+      s.D = s.L.map(r => [...r]); rotFaceCCW('D');
+      // tmpU→L: rotate CCW
+      s.L = tmpU.map(r => [...r]); rotFaceCCW('L');
+      rotFaceCCW('F');
+      rotFaceCW('B');
+    }
+  }
+}
+
+async function doWholeCubeRotation(axis, clockwise, duration = ANIM_DURATION) {
+  if (isAnimating) return;
+  isAnimating = true;
+
+  // Update logical state
+  rotateCubeStateWhole(axis, clockwise);
+
+  // Animate all 27 cubies rotating around the axis
+  const dir = { x: 1, y: 1, z: 1 }[axis]; // all axes use dir=1 for whole cube
+  const angle = (clockwise ? -1 : 1) * (Math.PI / 2);
+  const axisVec = AXIS_VECTORS[axis];
+
+  const pivot = new THREE.Group();
+  scene.add(pivot);
+
+  const allCubies = [...cubies];
+  for (const mesh of allCubies) {
+    cubieGroup.remove(mesh);
+    pivot.add(mesh);
+  }
+
+  const startTime = performance.now();
+
+  await new Promise(resolve => {
+    function animate(now) {
+      const elapsed = now - startTime;
+      const t = Math.min(elapsed / duration, 1);
+      const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+      if (axis === 'x') pivot.rotation.x = angle * eased;
+      if (axis === 'y') pivot.rotation.y = angle * eased;
+      if (axis === 'z') pivot.rotation.z = angle * eased;
+
+      if (t < 1) {
+        requestAnimationFrame(animate);
+      } else {
+        for (const mesh of allCubies) {
+          pivot.updateMatrixWorld();
+          mesh.applyMatrix4(pivot.matrixWorld);
+          mesh.position.sub(cubieGroup.position);
+          pivot.remove(mesh);
+          cubieGroup.add(mesh);
+
+          mesh.userData.pos = {
+            x: Math.round(mesh.position.x / STEP),
+            y: Math.round(mesh.position.y / STEP),
+            z: Math.round(mesh.position.z / STEP),
+          };
+          mesh.position.set(
+            mesh.userData.pos.x * STEP,
+            mesh.userData.pos.y * STEP,
+            mesh.userData.pos.z * STEP
+          );
+        }
+        scene.remove(pivot);
+        resolve();
+      }
+    }
+    requestAnimationFrame(animate);
+  });
+
+  // Force face label update
+  lastLabelMapStr = '';
+  updateFaceLabels();
+
+  isAnimating = false;
+
+  if (animationQueue.length > 0) {
+    const next = animationQueue.shift();
+    next();
+  }
+}
+
 // ─── MOVE SYSTEM ─────────────────────────────────────────────
 
 const moveHistory = [];
@@ -1175,6 +1356,13 @@ document.addEventListener('keydown', (e) => {
   const key = e.key.toUpperCase();
   const clockwise = !e.shiftKey;
 
+  // X/Y/Z — whole-cube rotation
+  if (key === 'X' || key === 'Y' || key === 'Z') {
+    e.preventDefault();
+    doWholeCubeRotation(key.toLowerCase(), clockwise);
+    return;
+  }
+
   if (FACES[key]) {
     e.preventDefault();
     // Map the relative face key to the physical face based on camera view
@@ -1244,6 +1432,12 @@ document.getElementById('btn-undo').addEventListener('click', undo);
 document.getElementById('btn-redo').addEventListener('click', redo);
 document.getElementById('btn-reset').addEventListener('click', resetCube);
 document.getElementById('btn-scramble').addEventListener('click', scramble);
+document.getElementById('btn-flip').addEventListener('click', async () => {
+  // Flip = x2 (two x rotations = cube upside down)
+  await doWholeCubeRotation('x', true);
+  await doWholeCubeRotation('x', true);
+});
+
 document.getElementById('btn-solve').addEventListener('click', () => {
   // Placeholder — solver will be added in Phase 2
   alert('Solver coming soon! For now, use Undo to reverse moves.');
@@ -1255,6 +1449,11 @@ document.getElementById('btn-help').addEventListener('click', () => {
     'F, R, L, U, D, B — Rotate face clockwise\n' +
     'Shift + key — Counter-clockwise\n' +
     '  (F = face you\'re looking at, R = right side, etc.)\n\n' +
+    'Whole-Cube Rotation:\n' +
+    'X — Tip cube forward (Shift+X = backward)\n' +
+    'Y — Spin cube right (Shift+Y = left)\n' +
+    'Z — Roll cube clockwise (Shift+Z = counter)\n' +
+    'Flip button — Flip cube upside-down\n\n' +
     'Camera Controls:\n' +
     'Arrow Left/Right — Rotate view horizontally\n' +
     'Arrow Up/Down — Tilt view vertically\n' +
