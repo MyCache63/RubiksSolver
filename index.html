@@ -1240,12 +1240,14 @@ function getFaceNormal(hit) {
 }
 
 function determineMoveFromDrag(cubiePos, faceNormal, dragDir) {
-  // dragDir is a 2D screen direction. We need to figure out which face to rotate.
-  // Project possible rotation axes to screen space and pick the best match.
+  // When you drag a cubie, the drag direction shows which way you want
+  // cubies to MOVE. The rotation axis is PERPENDICULAR to that motion.
+  // So we pick the axis whose screen projection is most perpendicular
+  // to the drag direction, and use the 2D cross product for CW/CCW.
 
   const candidates = [];
 
-  // The two possible axes are perpendicular to the face normal
+  // The two possible rotation axes are perpendicular to the clicked face
   const axes = [];
   if (Math.abs(faceNormal.x) > 0.5) { axes.push('y', 'z'); }
   else if (Math.abs(faceNormal.y) > 0.5) { axes.push('x', 'z'); }
@@ -1253,31 +1255,32 @@ function determineMoveFromDrag(cubiePos, faceNormal, dragDir) {
 
   for (const axis of axes) {
     const axisVec = AXIS_VECTORS[axis].clone();
-    // Project axis to screen
+    // Project axis direction to screen space
     const center = new THREE.Vector3(cubiePos.x * STEP, cubiePos.y * STEP, cubiePos.z * STEP);
     const p1 = center.clone().project(camera);
     const p2 = center.clone().add(axisVec).project(camera);
     const screenAxis = new THREE.Vector2(p2.x - p1.x, p2.y - p1.y).normalize();
 
-    // Dot product with drag direction
+    // Perpendicularity: how perpendicular is this axis to the drag?
+    // |dot| near 0 = perpendicular (what we want), |dot| near 1 = parallel
     const dot = screenAxis.dot(dragDir);
+    const perp = 1 - Math.abs(dot);
 
-    // Find which layer on this axis
+    // 2D cross product: determines rotation direction
+    const cross = screenAxis.x * dragDir.y - screenAxis.y * dragDir.x;
+
     const layer = Math.round(cubiePos[axis]);
 
-    // Find the matching face
     for (const [name, f] of Object.entries(FACES)) {
       if (f.axis === axis && f.layer === layer) {
-        candidates.push({ face: name, dot: Math.abs(dot), clockwise: dot * f.dir > 0 });
+        candidates.push({ face: name, perp, clockwise: cross * f.dir > 0 });
       }
     }
-
-    // Also check if the entire axis matches (for middle-ish layers we skip — only outer faces)
   }
 
   if (candidates.length === 0) return null;
-  // Pick the axis with highest alignment to drag direction
-  candidates.sort((a, b) => b.dot - a.dot);
+  // Pick the axis most perpendicular to the drag direction
+  candidates.sort((a, b) => b.perp - a.perp);
   return candidates[0];
 }
 
