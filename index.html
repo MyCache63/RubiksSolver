@@ -2489,6 +2489,45 @@ async function showOffSolve() {
   }
 }
 
+// ─── SHOW OFF: CONTINUOUS PLAY ───────────────────────────────
+
+async function continuousLoop() {
+  continuousRunning = true;
+  // Disable manual scramble/solve while continuous is running
+  document.getElementById('so-scramble').disabled = true;
+  document.getElementById('so-solve').disabled = true;
+
+  while (continuousMode && showOffMode) {
+    // Scramble
+    await showOffScramble();
+    if (!continuousMode || !showOffMode) break;
+
+    // Brief pause before solving
+    await new Promise(r => setTimeout(r, 1000));
+    if (!continuousMode || !showOffMode) break;
+
+    // Solve
+    await showOffSolve();
+    if (!continuousMode || !showOffMode) break;
+
+    // Wait for confetti to finish (or 5 seconds)
+    await new Promise(r => setTimeout(r, 5000));
+  }
+
+  continuousRunning = false;
+  if (showOffMode) {
+    document.getElementById('so-scramble').disabled = false;
+    document.getElementById('so-solve').disabled = false;
+  }
+}
+
+document.getElementById('so-continuous').addEventListener('change', (e) => {
+  continuousMode = e.target.checked;
+  if (continuousMode && !continuousRunning && showOffMode) {
+    continuousLoop();
+  }
+});
+
 // Wire buttons
 document.getElementById('so-scramble').addEventListener('click', showOffScramble);
 document.getElementById('so-solve').addEventListener('click', showOffSolve);
