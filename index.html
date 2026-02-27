@@ -316,14 +316,19 @@ const FACE_NORMALS = {
 };
 
 function getViewFaces() {
-  // Camera direction: from camera toward origin (the cube center)
-  const camDir = camera.position.clone().negate().normalize();
-  // Camera up vector
-  const camUp = camera.up.clone().normalize();
-  // Camera right vector
-  const camRight = new THREE.Vector3().crossVectors(camDir, camUp).normalize();
+  camera.updateMatrixWorld();
 
-  // Find which physical face best matches each view direction
+  // "Front" = the face whose outward normal points toward the camera.
+  // That's the face you're looking at. Use camera position (from origin
+  // toward camera) — NOT negated.
+  const camToward = camera.position.clone().normalize();
+
+  // Camera's actual right and up vectors from its world matrix.
+  // (camera.up is always (0,1,0) with OrbitControls — that's not
+  // the real screen-up when the camera is tilted.)
+  const camRight = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+  const camUp    = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
+
   function bestFace(dir) {
     let best = null, bestDot = -2;
     for (const [name, normal] of Object.entries(FACE_NORMALS)) {
@@ -333,20 +338,19 @@ function getViewFaces() {
     return best;
   }
 
-  const front = bestFace(camDir);       // face we're looking at
-  const up = bestFace(camUp);           // face on top
-  const right = bestFace(camRight);     // face on our right
+  const front = bestFace(camToward);    // face pointing at us = front
+  const up    = bestFace(camUp);        // face in screen-up direction
+  const right = bestFace(camRight);     // face in screen-right direction
 
-  // Opposites
-  const OPPOSITE = { R: 'L', L: 'R', U: 'D', D: 'U', F: 'B', B: 'F' };
+  const OPP = { R: 'L', L: 'R', U: 'D', D: 'U', F: 'B', B: 'F' };
 
   return {
     F: front,
-    B: OPPOSITE[front],
+    B: OPP[front],
     U: up,
-    D: OPPOSITE[up],
+    D: OPP[up],
     R: right,
-    L: OPPOSITE[right],
+    L: OPP[right],
   };
 }
 
@@ -485,6 +489,102 @@ function buildCube() {
 }
 
 buildCube();
+
+// ─── FACE LABELS (dynamic F/R/L/U/D/B on center cubies) ─────
+
+const faceLabelGroup = new THREE.Group();
+scene.add(faceLabelGroup);
+const faceLabels = {}; // physicalFace -> { mesh, canvas, ctx, texture }
+
+// How far from origin each label plane sits (just outside the cubie face)
+const LABEL_OFFSET = STEP + CUBIE_SIZE / 2 + 0.02;
+
+// For each physical face, define the outward normal and which way is "up"
+// on that face's surface (so the text is oriented correctly).
+const FACE_LABEL_ORIENTATIONS = {
+  R: { normal: [ 1, 0, 0], up: [0, 1, 0] },
+  L: { normal: [-1, 0, 0], up: [0, 1, 0] },
+  U: { normal: [ 0, 1, 0], up: [0, 0,-1] },
+  D: { normal: [ 0,-1, 0], up: [0, 0, 1] },
+  F: { normal: [ 0, 0, 1], up: [0, 1, 0] },
+  B: { normal: [ 0, 0,-1], up: [0, 1, 0] },
+};
+
+for (const [physFace, orient] of Object.entries(FACE_LABEL_ORIENTATIONS)) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter;
+
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: true,
+    side: THREE.FrontSide,
+  });
+
+  const plane = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.7), material);
+
+  // Position just outside the face center
+  const n = new THREE.Vector3(...orient.normal);
+  const u = new THREE.Vector3(...orient.up);
+  const r = new THREE.Vector3().crossVectors(u, n);
+  plane.position.copy(n.clone().multiplyScalar(LABEL_OFFSET));
+
+  // Orient: build rotation from right/up/normal basis vectors
+  const mat4 = new THREE.Matrix4().makeBasis(r, u, n);
+  plane.quaternion.setFromRotationMatrix(mat4);
+
+  faceLabelGroup.add(plane);
+  faceLabels[physFace] = { mesh: plane, canvas, ctx, texture };
+}
+
+// Draw a letter on a face label canvas
+function drawFaceLabel(physFace, letter) {
+  const { canvas, ctx, texture } = faceLabels[physFace];
+  ctx.clearRect(0, 0, 128, 128);
+
+  // Semi-transparent dark circle background
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+  ctx.beginPath();
+  ctx.arc(64, 64, 48, 0, Math.PI * 2);
+  ctx.fill();
+
+  // White letter
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 60px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(letter, 64, 67);
+  texture.needsUpdate = true;
+}
+
+let lastLabelMapStr = '';
+
+function updateFaceLabels() {
+  const viewMap = getViewFaces();
+
+  // Build reverse map: physical face -> relative label (F, R, L, U, D, B)
+  const reverseMap = {};
+  for (const [rel, phys] of Object.entries(viewMap)) {
+    reverseMap[phys] = rel;
+  }
+
+  // Only redraw if the mapping actually changed
+  const mapStr = JSON.stringify(reverseMap);
+  if (mapStr === lastLabelMapStr) return;
+  lastLabelMapStr = mapStr;
+
+  for (const [physFace, letter] of Object.entries(reverseMap)) {
+    drawFaceLabel(physFace, letter);
+  }
+}
+
+// Initial draw
+updateFaceLabels();
 
 // ─── FACE ROTATION ANIMATION ────────────────────────────────
 
@@ -1130,8 +1230,10 @@ function updateFaceButtonLabels() {
   }
 }
 
-// Update labels periodically (camera may have moved)
-setInterval(updateFaceButtonLabels, 500);
+// Button labels are updated in the render loop via updateFaceLabels()
+// (which already runs every frame). But we also need to update these
+// button tooltips, so we hook into the same cycle.
+
 
 document.getElementById('btn-toggle-face-controls').addEventListener('click', () => {
   faceControlsDiv.classList.toggle('visible');
@@ -1181,6 +1283,8 @@ window.addEventListener('resize', () => {
 function tick() {
   requestAnimationFrame(tick);
   orbitControls.update();
+  updateFaceLabels();
+  updateFaceButtonLabels();
   renderer.render(scene, camera);
 }
 
