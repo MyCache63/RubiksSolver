@@ -2285,6 +2285,111 @@ document.querySelectorAll('.grid-btn').forEach(btn => {
   });
 });
 
+// ─── SHOW OFF: SCRAMBLE ALL & SOLVE ALL ──────────────────────
+
+function getShowOffSpeed() {
+  return parseInt(document.getElementById('so-speed').value, 10);
+}
+
+function setShowOffBusy(busy) {
+  showOffBusy = busy;
+  document.getElementById('so-scramble').disabled = busy;
+  document.getElementById('so-solve').disabled = busy;
+  document.getElementById('so-exit').disabled = busy;
+  document.querySelectorAll('.grid-btn').forEach(b => b.disabled = busy);
+}
+
+async function showOffScramble() {
+  if (showOffBusy || showOffCubes.length === 0) return;
+  setShowOffBusy(true);
+
+  const speed = getShowOffSpeed();
+  const scrambleLength = 20;
+
+  // Generate independent scrambles for each cube
+  const allScrambles = showOffCubes.map(() => generateScramble(scrambleLength));
+
+  // Find max length (some scrambles may have double-moves making them longer)
+  const maxLen = Math.max(...allScrambles.map(s => s.length));
+
+  // Animate turn-by-turn in sync
+  for (let i = 0; i < maxLen; i++) {
+    const promises = [];
+    for (let c = 0; c < showOffCubes.length; c++) {
+      if (i < allScrambles[c].length) {
+        const move = allScrambles[c][i];
+        promises.push(showOffCubes[c].doMove(move.face, move.clockwise, speed));
+      }
+    }
+    await Promise.all(promises);
+  }
+
+  setShowOffBusy(false);
+}
+
+async function showOffSolve() {
+  if (showOffBusy || showOffCubes.length === 0) return;
+  if (!solverReady) {
+    showSolverStatus('Solver still loading...');
+    return;
+  }
+
+  // Check if any cubes need solving
+  const unsolved = showOffCubes.filter(c => !c.isSolved());
+  if (unsolved.length === 0) {
+    showSolverStatus('All cubes already solved!');
+    return;
+  }
+
+  setShowOffBusy(true);
+
+  // Solve each cube (brief yield between to not freeze UI)
+  const allSolutions = [];
+  for (const soCube of showOffCubes) {
+    if (soCube.isSolved()) {
+      allSolutions.push([]);
+      continue;
+    }
+    try {
+      const faceletStr = soCube.toFaceletString();
+      const cube = Cube.fromString(faceletStr);
+      const solution = cube.solve();
+      allSolutions.push(parseSolution(solution || ''));
+    } catch (e) {
+      console.error('Solve error:', e);
+      allSolutions.push([]);
+    }
+    // Yield to UI
+    await new Promise(r => setTimeout(r, 0));
+  }
+
+  const speed = getShowOffSpeed();
+  const maxLen = Math.max(...allSolutions.map(s => s.length));
+
+  // Step through solutions in sync
+  for (let i = 0; i < maxLen; i++) {
+    const promises = [];
+    for (let c = 0; c < showOffCubes.length; c++) {
+      if (i < allSolutions[c].length) {
+        const move = allSolutions[c][i];
+        promises.push(showOffCubes[c].doMove(move.face, move.clockwise, speed));
+      }
+    }
+    await Promise.all(promises);
+  }
+
+  setShowOffBusy(false);
+
+  // Fire confetti (Step 5)
+  if (typeof confettiSystem !== 'undefined' && confettiSystem) {
+    confettiSystem.fireFromAllCubes();
+  }
+}
+
+// Wire buttons
+document.getElementById('so-scramble').addEventListener('click', showOffScramble);
+document.getElementById('so-solve').addEventListener('click', showOffSolve);
+
 // Wire showoff buttons
 document.getElementById('btn-showoff').addEventListener('click', enterShowOffMode);
 document.getElementById('so-exit').addEventListener('click', exitShowOffMode);
