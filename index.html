@@ -357,15 +357,18 @@ canvas {
   cursor: pointer;
 }
 
-/* Debug log panel — always visible for diagnostics */
+/* Debug log panel — hidden by default, toggled via Log button */
 #debug-log {
-  display: flex;
+  display: none;
   flex-direction: column;
   position: fixed;
   top: 52px;
   left: 8px;
   width: 320px;
   z-index: 300;
+}
+#debug-log.visible {
+  display: flex;
 }
 
 #debug-log-header {
@@ -419,6 +422,7 @@ canvas {
   <div style="display:flex;gap:8px;">
     <button class="btn" id="btn-toggle-face-controls" title="Toggle face buttons">Controls</button>
     <button class="btn btn-primary" id="btn-showoff" title="Show Off mode">Show Off</button>
+    <button class="btn" id="btn-debug-toggle" title="Toggle debug log">Log</button>
     <button class="btn" id="btn-help" title="Keyboard shortcuts">?</button>
   </div>
 </div>
@@ -551,6 +555,9 @@ document.getElementById('debug-clear').addEventListener('click', () => {
   debugLines = [];
   debugLogEl.value = '';
   try { localStorage.removeItem('rubiks_debug_log'); } catch(e) {}
+});
+document.getElementById('btn-debug-toggle').addEventListener('click', () => {
+  debugLogPanel.classList.toggle('visible');
 });
 
 debugLog('Rubiks Solver v1.0.5 starting');
