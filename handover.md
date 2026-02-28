@@ -34,7 +34,7 @@ Phase 1 + Phase 2A + Show Off Mode implemented in `index.html` (~2592 lines). Si
   - Scramble All — synchronized turn-by-turn scrambling across all cubes
   - Solve All — synchronized solving with Kociemba algorithm
   - Confetti — particle physics burst from all cube faces on solve completion
-  - Continuous play — checkbox that auto-loops scramble → solve → confetti → wait → repeat
+  - Continuous play — each cube independently cycles scramble → solve → confetti on a shared beat (v1.0.5)
   - Own speed selector (Medium/Fast/Instant)
   - Camera auto-zooms to fit grid
   - Normal mode completely isolated — enter/exit cleanly
@@ -113,3 +113,4 @@ Phase 1 + Phase 2A + Show Off Mode implemented in `index.html` (~2592 lines). Si
 - `before-phase2a-feb27` — Before Phase 2A (solver + whole-cube rotation)
 - `before-showoff-mode-feb27` — Before Show Off mode implementation
 - `before-solver-move-fix-feb28` — Before v1.0.4 solver move-string fix
+- `before-continuous-pipeline-feb28` — Before v1.0.5 independent cube pipelines
