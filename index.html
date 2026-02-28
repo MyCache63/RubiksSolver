@@ -415,7 +415,7 @@ canvas {
 </div>
 
 <div id="top-bar">
-  <div class="logo">RUBIK'S SOLVER <span style="font-size:10px;opacity:0.5;font-weight:400">v1.0.1</span></div>
+  <div class="logo">RUBIK'S SOLVER <span style="font-size:10px;opacity:0.5;font-weight:400">v1.0.2</span></div>
   <div style="display:flex;gap:8px;">
     <button class="btn" id="btn-toggle-face-controls" title="Toggle face buttons">Controls</button>
     <button class="btn btn-primary" id="btn-showoff" title="Show Off mode">Show Off</button>
@@ -553,7 +553,7 @@ document.getElementById('debug-clear').addEventListener('click', () => {
   try { localStorage.removeItem('rubiks_debug_log'); } catch(e) {}
 });
 
-debugLog('Rubiks Solver v1.0.1 starting');
+debugLog('Rubiks Solver v1.0.2 starting');
 
 // ─── CONSTANTS ───────────────────────────────────────────────
 
@@ -2587,16 +2587,21 @@ async function showOffScramble() {
 }
 
 async function showOffSolve() {
-  if (showOffBusy || showOffCubes.length === 0) return;
+  debugLog('--- showOffSolve START ---');
+  if (showOffBusy || showOffCubes.length === 0) {
+    debugLog(`showOffSolve: blocked (busy=${showOffBusy}, cubes=${showOffCubes.length})`);
+    return;
+  }
 
   // Check if worker solver is available
+  debugLog(`Solver status: worker=${solverWorkerReady}, main=${solverReady}`);
   if (!solverWorkerReady) {
     if (!solverReady) {
       showSolverStatus('Solver still loading...');
-      debugLog('Solve: neither main nor worker solver ready');
+      debugLog('Solve: NEITHER solver ready — aborting');
       return;
     }
-    debugLog('Solve: worker not ready, falling back to main thread');
+    debugLog('Solve: worker NOT ready, using main thread (will block)');
   }
 
   const unsolved = showOffCubes.filter(c => !c.isSolved());
@@ -2614,30 +2619,37 @@ async function showOffSolve() {
   const statusEl = document.getElementById('solver-status');
   const allSolutions = [];
 
+  // Yield to let status text paint
+  await new Promise(r => setTimeout(r, 10));
+
   for (let i = 0; i < total; i++) {
     const soCube = showOffCubes[i];
     if (soCube.isSolved()) {
       allSolutions.push([]);
-      debugLog(`Cube ${i}: already solved`);
+      debugLog(`Cube ${i}: already solved, skip`);
       continue;
     }
 
     statusEl.textContent = `Computing... ${i + 1}/${total}`;
     statusEl.style.display = 'block';
-    debugLog(`Cube ${i}: solving...`);
+
+    const faceletStr = soCube.toFaceletString();
+    debugLog(`Cube ${i}: solving [${faceletStr}]`);
+
+    // Yield between solver calls so browser can paint status
+    await new Promise(r => setTimeout(r, 10));
 
     const t0 = performance.now();
-    const faceletStr = soCube.toFaceletString();
-
     try {
       let solution;
       if (useWorker) {
-        // Solve in Web Worker — main thread stays fully responsive
+        debugLog(`Cube ${i}: sending to worker...`);
         const result = await solveInWorker(faceletStr);
+        debugLog(`Cube ${i}: worker responded, type=${result.type}`);
         if (result.type === 'error') throw new Error(result.error);
         solution = result.solution;
       } else {
-        // Fallback: main-thread solve with yield
+        debugLog(`Cube ${i}: main thread solve...`);
         await new Promise(r => setTimeout(r, 50));
         const cube = Cube.fromString(faceletStr);
         solution = cube.solve();
@@ -2655,20 +2667,25 @@ async function showOffSolve() {
   }
 
   statusEl.style.display = 'none';
+  debugLog('--- ALL CUBES SOLVED, starting animation ---');
 
   const speed = getShowOffSpeed();
   const maxLen = Math.max(0, ...allSolutions.map(s => s.length));
-  debugLog(`Solve: all computed, maxLen=${maxLen}, speed=${speed}ms`);
+  const moveCounts = allSolutions.map(s => s.length);
+  debugLog(`Animation: ${maxLen} steps, speed=${speed}ms, moves=[${moveCounts.join(',')}]`);
 
   try {
     for (let i = 0; i < maxLen; i++) {
-      const movesThisStep = [];
-      for (let c = 0; c < showOffCubes.length; c++) {
-        if (i < allSolutions[c].length) {
-          movesThisStep.push(`c${c}:${allSolutions[c][i].face}${allSolutions[c][i].clockwise ? '' : "'"}`);
+      // Log first 3 steps, every 5th step, and last step
+      if (i < 3 || i % 5 === 0 || i === maxLen - 1) {
+        const movesThisStep = [];
+        for (let c = 0; c < showOffCubes.length; c++) {
+          if (i < allSolutions[c].length) {
+            movesThisStep.push(`c${c}:${allSolutions[c][i].face}${allSolutions[c][i].clockwise ? '' : "'"}`);
+          }
         }
+        debugLog(`Anim step ${i+1}/${maxLen}: ${movesThisStep.join(' ')}`);
       }
-      debugLog(`Step ${i+1}/${maxLen}: ${movesThisStep.join(' ')}`);
 
       const promises = [];
       for (let c = 0; c < showOffCubes.length; c++) {
@@ -2680,21 +2697,21 @@ async function showOffSolve() {
 
       // Race the animation against a timeout guard (10 seconds)
       const timeout = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error(`Step ${i+1} timed out`)), 10000)
+        setTimeout(() => reject(new Error(`Step ${i+1} timed out after 10s`)), 10000)
       );
       await Promise.race([Promise.all(promises), timeout]);
 
       // Yield to the browser between steps so it can render and stay responsive
       await new Promise(r => setTimeout(r, 0));
-      debugLog(`Step ${i} done`);
     }
-    debugLog('Solve: animation complete');
+    debugLog('--- ANIMATION COMPLETE ---');
   } catch (e) {
-    debugLog(`Solve: ANIMATION ERROR: ${e.message}\n${e.stack}`);
+    debugLog(`ANIMATION ERROR at step: ${e.message}`);
   }
 
+  debugLog('Firing confetti');
   confettiSystem.fireFromAllCubes();
-  debugLog('Solve: done');
+  debugLog('--- showOffSolve END ---');
   setShowOffBusy(false);
 }
 
@@ -2810,11 +2827,9 @@ function initMainSolver() {
     btnSolveEl.textContent = 'Solve (error)';
   }
 }
-if (window.requestIdleCallback) {
-  requestIdleCallback(initMainSolver, { timeout: 5000 });
-} else {
-  setTimeout(initMainSolver, 3000);
-}
+// Use fixed timeout — requestIdleCallback was firing DURING solver await gaps
+// and blocking the main thread for 4-5 seconds mid-solve.
+setTimeout(initMainSolver, 1000);
 
 // ─── SOLVER WEB WORKER (for show-off mode) ──────────────────
 // Runs Kociemba solver in a background thread so the main thread
