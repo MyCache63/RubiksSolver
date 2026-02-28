@@ -2521,10 +2521,15 @@ async function showOffScramble() {
 
 async function showOffSolve() {
   if (showOffBusy || showOffCubes.length === 0) return;
-  if (!solverReady) {
-    showSolverStatus('Solver still loading...');
-    debugLog('Solve: solver not ready');
-    return;
+
+  // Check if worker solver is available
+  if (!solverWorkerReady) {
+    if (!solverReady) {
+      showSolverStatus('Solver still loading...');
+      debugLog('Solve: neither main nor worker solver ready');
+      return;
+    }
+    debugLog('Solve: worker not ready, falling back to main thread');
   }
 
   const unsolved = showOffCubes.filter(c => !c.isSolved());
@@ -2535,10 +2540,8 @@ async function showOffSolve() {
   }
 
   setShowOffBusy(true);
-  debugLog(`Solve: starting, ${showOffCubes.length} cubes, ${unsolved.length} unsolved`);
-
-  // Yield so the "starting" message actually paints to screen
-  await new Promise(r => setTimeout(r, 50));
+  const useWorker = solverWorkerReady;
+  debugLog(`Solve: ${showOffCubes.length} cubes, ${unsolved.length} unsolved, worker=${useWorker}`);
 
   const total = showOffCubes.length;
   const statusEl = document.getElementById('solver-status');
@@ -2554,32 +2557,32 @@ async function showOffSolve() {
 
     statusEl.textContent = `Computing... ${i + 1}/${total}`;
     statusEl.style.display = 'block';
-    debugLog(`Cube ${i}: computing...`);
+    debugLog(`Cube ${i}: solving...`);
 
-    // Run solve in its own macro-task via setTimeout.
-    // This ensures the browser paints our debug messages + status overlay
-    // BEFORE the synchronous cube.solve() blocks the thread.
     const t0 = performance.now();
-    const result = await new Promise(resolve => {
-      setTimeout(() => {
-        try {
-          const faceletStr = soCube.toFaceletString();
-          const cube = Cube.fromString(faceletStr);
-          const solution = cube.solve();
-          resolve({ ok: true, solution, faceletStr });
-        } catch (e) {
-          resolve({ ok: false, error: e.message });
-        }
-      }, 50);
-    });
+    const faceletStr = soCube.toFaceletString();
 
-    const elapsed = (performance.now() - t0).toFixed(0);
-    if (result.ok) {
-      const moves = parseSolution(result.solution || '');
-      debugLog(`Cube ${i}: ${elapsed}ms, ${moves.length} moves [${result.faceletStr}]`);
+    try {
+      let solution;
+      if (useWorker) {
+        // Solve in Web Worker — main thread stays fully responsive
+        const result = await solveInWorker(faceletStr);
+        if (result.type === 'error') throw new Error(result.error);
+        solution = result.solution;
+      } else {
+        // Fallback: main-thread solve with yield
+        await new Promise(r => setTimeout(r, 50));
+        const cube = Cube.fromString(faceletStr);
+        solution = cube.solve();
+      }
+
+      const elapsed = (performance.now() - t0).toFixed(0);
+      const moves = parseSolution(solution || '');
+      debugLog(`Cube ${i}: ${elapsed}ms, ${moves.length} moves`);
       allSolutions.push(moves);
-    } else {
-      debugLog(`Cube ${i}: ERROR ${elapsed}ms: ${result.error}`);
+    } catch (e) {
+      const elapsed = (performance.now() - t0).toFixed(0);
+      debugLog(`Cube ${i}: ERROR ${elapsed}ms: ${e.message} [${faceletStr}]`);
       allSolutions.push([]);
     }
   }
@@ -2588,9 +2591,8 @@ async function showOffSolve() {
 
   const speed = getShowOffSpeed();
   const maxLen = Math.max(0, ...allSolutions.map(s => s.length));
-  debugLog(`Solve: all computed, maxLen=${maxLen}, speed=${speed}ms, starting animation`);
+  debugLog(`Solve: all computed, maxLen=${maxLen}, speed=${speed}ms`);
 
-  // Step through solutions in sync — all cubes animate turn i together
   try {
     for (let i = 0; i < maxLen; i++) {
       if (i % 5 === 0) debugLog(`Animate step ${i}/${maxLen}`);
@@ -2606,12 +2608,10 @@ async function showOffSolve() {
     debugLog('Solve: animation complete');
   } catch (e) {
     debugLog(`Solve: ANIMATION ERROR: ${e.message}`);
-    console.error('Solve animation error:', e);
   }
 
-  // Fire confetti then release busy
   confettiSystem.fireFromAllCubes();
-  debugLog('Solve: confetti fired, done');
+  debugLog('Solve: done');
   setShowOffBusy(false);
 }
 
@@ -2712,6 +2712,69 @@ setTimeout(() => {
     btnSolveEl.textContent = 'Solve (error)';
   }
 }, 1000);
+
+// ─── SOLVER WEB WORKER (for show-off mode) ──────────────────
+// Runs Kociemba solver in a background thread so the main thread
+// stays responsive during multi-cube solves.
+
+let solverWorker = null;
+let solverWorkerReady = false;
+const solverWorkerCallbacks = {};
+let solverWorkerNextId = 0;
+
+function initSolverWorker() {
+  try {
+    const code = [
+      "importScripts('https://cdn.jsdelivr.net/npm/cubejs@1.3.2/lib/cube.js');",
+      "Cube.initSolver();",
+      "postMessage({ type: 'ready' });",
+      "onmessage = function(e) {",
+      "  try {",
+      "    var c = Cube.fromString(e.data.facelet);",
+      "    var s = c.solve();",
+      "    postMessage({ type: 'result', id: e.data.id, solution: s });",
+      "  } catch (err) {",
+      "    postMessage({ type: 'error', id: e.data.id, error: String(err) });",
+      "  }",
+      "};"
+    ].join('\n');
+
+    const blob = new Blob([code], { type: 'text/javascript' });
+    solverWorker = new Worker(URL.createObjectURL(blob));
+
+    solverWorker.onmessage = function(e) {
+      if (e.data.type === 'ready') {
+        solverWorkerReady = true;
+        debugLog('Solver worker: ready');
+      } else {
+        const cb = solverWorkerCallbacks[e.data.id];
+        if (cb) {
+          delete solverWorkerCallbacks[e.data.id];
+          cb(e.data);
+        }
+      }
+    };
+
+    solverWorker.onerror = function(e) {
+      debugLog('Solver worker error: ' + (e.message || e));
+    };
+
+    debugLog('Solver worker: initializing...');
+  } catch (e) {
+    debugLog('Solver worker: failed to create: ' + e.message);
+  }
+}
+
+function solveInWorker(faceletStr) {
+  return new Promise(resolve => {
+    const id = ++solverWorkerNextId;
+    solverWorkerCallbacks[id] = resolve;
+    solverWorker.postMessage({ id, facelet: faceletStr });
+  });
+}
+
+// Start worker initialization immediately
+initSolverWorker();
 
 </script>
 </body>
