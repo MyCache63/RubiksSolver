@@ -8,7 +8,7 @@
 
 ## Current State
 
-Phase 1 + Phase 2A + Show Off Mode implemented in `index.html` (~2592 lines). Single HTML file with:
+Phase 1 + Phase 2A + Show Off Mode + Cube Crawler implemented in `index.html` (~3733 lines). Single HTML file with:
 
 ### Working Features
 - **3D rendering** — Three.js with rounded cubelets, proper lighting, shadows, dark theme
@@ -29,6 +29,7 @@ Phase 1 + Phase 2A + Show Off Mode implemented in `index.html` (~2592 lines). Si
 - **Kociemba solver** — cubejs library loaded from CDN, initializes on page load (~4-5 sec)
 - **Solution playback** — Step forward/back, play/pause auto-advance, move token display with highlighting
 - **Guard rails** — Manual moves blocked during solution playback
+- **Debug log toggle** — "Log" button in top bar shows/hides debug panel (hidden by default)
 - **Show Off Mode** — Multi-cube grid display (1×1 to 5×5) with:
   - Grid preset buttons (1, 2×2, 3×3, 4×4, 5×5)
   - Scramble All — synchronized turn-by-turn scrambling across all cubes
@@ -38,12 +39,23 @@ Phase 1 + Phase 2A + Show Off Mode implemented in `index.html` (~2592 lines). Si
   - Own speed selector (Medium/Fast/Instant)
   - Camera auto-zooms to fit grid
   - Normal mode completely isolated — enter/exit cleanly
+- **Cube Crawler Mode** (v1.0.6) — Game mode where cube crawls across 10×10 tile floor:
+  - Cube moves by spinning two opposing face layers simultaneously (like wheels)
+  - Arrow keys steer: Right=F+B', Left=F'+B, Up=R'+L, Down=R+L'
+  - Space bar does lazy-susan spin (top 2 layers rotate, bottom stays put)
+  - 10×10 checkerboard tile floor, tiles turn purple when visited
+  - Demo button runs autonomous snake-zigzag covering all 100 tiles
+  - Speed selector (Slow/Medium/Fast)
+  - Reset puts cube back at start with fresh floor
+  - Fog reduced in crawler mode so far tiles are visible
+  - Mode conflicts prevented (can't enter Show Off while in Crawler and vice versa)
 
 ### UI Layout
-- Top bar: logo + Controls toggle + Show Off button + Help button
+- Top bar: logo + Controls toggle + Show Off button + Crawler button + Log toggle + Help button
 - Center: 3D cube (full screen behind UI)
 - Bottom bar: Undo/Redo/Reset + Scramble/Speed/Solve/Flip buttons + solution bar (when solving) + toggleable face controls
 - Show-off bar (replaces bottom bar in show-off mode): Grid buttons + Scramble All/Speed/Solve All + Continuous toggle + Exit
+- Crawler bar (replaces bottom bar in crawler mode): Demo/Speed/Reset/Exit + status text
 - Solver status overlay: centered messages that auto-hide
 
 ---
@@ -74,7 +86,8 @@ Phase 1 + Phase 2A + Show Off Mode implemented in `index.html` (~2592 lines). Si
 - Show Off mode uses Web Worker for solver (main thread stays responsive)
 - Show Off animations centralized in main tick() loop — all cubes animated from single rAF, no per-cube callbacks
 - Show Off with 5×5 (25 cubes, 675 cubies) may be slow on older phones — needs device testing
-- Debug log panel (textarea) visible — logs to localStorage for crash recovery (hide once stable)
+- Crawler mode: CrawlerCube class has its own animation system (dual-pivot for crawl, single-pivot for spin)
+- Crawler mode reduces fog density from 0.02 to 0.005, restores on exit
 - Dynamic face mapping uses `camera.up` vector — works correctly with OrbitControls but if camera flips upside-down the mapping may be unexpected
 - Up/Down arrow keys tilt 30° (not 90°) to avoid camera flip issues
 - Cube state tracking and 3D visual state are maintained separately — cubeState used for display, moveHistory used for solver
@@ -114,3 +127,4 @@ Phase 1 + Phase 2A + Show Off Mode implemented in `index.html` (~2592 lines). Si
 - `before-showoff-mode-feb27` — Before Show Off mode implementation
 - `before-solver-move-fix-feb28` — Before v1.0.4 solver move-string fix
 - `before-continuous-pipeline-feb28` — Before v1.0.5 independent cube pipelines
+- `before-crawler-feb28` — Before v1.0.6 Cube Crawler mode
