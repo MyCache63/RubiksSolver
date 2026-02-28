@@ -1,6 +1,6 @@
 # Rubik's Solver — Handover
 
-**Last updated:** Feb 27, 2026
+**Last updated:** Feb 28, 2026
 **Branch:** main
 **Build status:** Single HTML file, opens in any browser, no build step
 
@@ -69,14 +69,16 @@ Phase 1 + Phase 2A + Show Off Mode implemented in `index.html` (~2592 lines). Si
 
 ## Known Issues / Notes
 
-- cubejs solver init takes ~4-5 seconds — button shows "Solve (loading...)" until ready (now deferred via requestIdleCallback)
+- cubejs solver init takes ~1 second — button shows "Solve (loading...)" until ready
+- **Solver uses move strings, not facelets** — v1.0.4 fix: our cubeState→facelet conversion had bugs (invalid permutations). Now we send the move history (e.g. "R U F' D2 B") to the worker and let cubejs reconstruct the state via Cube.move(). Guaranteed valid.
 - Show Off mode uses Web Worker for solver (main thread stays responsive)
 - Show Off animations centralized in main tick() loop — all cubes animated from single rAF, no per-cube callbacks
 - Show Off with 5×5 (25 cubes, 675 cubies) may be slow on older phones — needs device testing
-- Debug log panel (textarea) visible in show-off mode — logs to localStorage for crash recovery
+- Debug log panel (textarea) visible — logs to localStorage for crash recovery (hide once stable)
 - Dynamic face mapping uses `camera.up` vector — works correctly with OrbitControls but if camera flips upside-down the mapping may be unexpected
 - Up/Down arrow keys tilt 30° (not 90°) to avoid camera flip issues
-- Cube state tracking and 3D visual state are maintained separately — both update on each move, but no sync-check exists yet
+- Cube state tracking and 3D visual state are maintained separately — cubeState used for display, moveHistory used for solver
+- cubeState→facelet mapping has known bugs — DO NOT use for solver, always use move strings
 - Touch drag on mobile may need tuning (works but sensitivity may need adjustment)
 - No service worker yet (requires server for offline)
 - Whole-cube rotation NOT recorded in undo history (it's orientation, not a solve move)
@@ -110,3 +112,4 @@ Phase 1 + Phase 2A + Show Off Mode implemented in `index.html` (~2592 lines). Si
 - `before-dynamic-controls-feb27` — Before adding dynamic controls, speed selector, arrow keys, snap view
 - `before-phase2a-feb27` — Before Phase 2A (solver + whole-cube rotation)
 - `before-showoff-mode-feb27` — Before Show Off mode implementation
+- `before-solver-move-fix-feb28` — Before v1.0.4 solver move-string fix
