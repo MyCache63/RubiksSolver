@@ -526,10 +526,22 @@ function debugLog(msg) {
   const line = `[${ts}] ${msg}`;
   debugLines.push(line);
   if (debugLines.length > 200) debugLines.shift();
-  debugLogEl.value = debugLines.join('\n');
+  const text = debugLines.join('\n');
+  debugLogEl.value = text;
   debugLogEl.scrollTop = debugLogEl.scrollHeight;
+  // Persist to localStorage so log survives a crash
+  try { localStorage.setItem('rubiks_debug_log', text); } catch(e) {}
   console.log('[SO]', msg);
 }
+
+// On load, recover previous crash log if any
+try {
+  const prev = localStorage.getItem('rubiks_debug_log');
+  if (prev) {
+    debugLines = prev.split('\n');
+    debugLogEl.value = '--- RECOVERED FROM PREVIOUS SESSION ---\n' + prev + '\n--- NEW SESSION ---\n';
+  }
+} catch(e) {}
 
 document.getElementById('debug-copy').addEventListener('click', () => {
   debugLogEl.select();
@@ -539,6 +551,7 @@ document.getElementById('debug-copy').addEventListener('click', () => {
 document.getElementById('debug-clear').addEventListener('click', () => {
   debugLines = [];
   debugLogEl.value = '';
+  try { localStorage.removeItem('rubiks_debug_log'); } catch(e) {}
 });
 
 // ─── CONSTANTS ───────────────────────────────────────────────
@@ -2066,8 +2079,7 @@ class ShowOffCube {
 
     this.cubies = [];
     this.cubeState = {};
-    this.isAnimating = false;
-    this.animQueue = [];
+    this._activeRotation = null;
 
     this.initState();
     this.buildCubies();
@@ -2115,6 +2127,10 @@ class ShowOffCube {
   }
 
   dispose() {
+    // Cancel any in-progress animation
+    if (this._activeRotation) {
+      this._finishRotation();
+    }
     for (const mesh of this.cubies) {
       mesh.material.forEach(m => m.dispose());
       this.group.remove(mesh);
@@ -2234,6 +2250,7 @@ class ShowOffCube {
     }
   }
 
+  // Set up a rotation — driven by the main tick() loop, NOT its own rAF
   rotateFace(faceName, clockwise, duration) {
     return new Promise(resolve => {
       const faceInfo = FACES[faceName];
@@ -2243,6 +2260,8 @@ class ShowOffCube {
       const angle = (clockwise ? -1 : 1) * dir * (Math.PI / 2);
       const layerCubies = this.getCubiesOnLayer(axis, layer);
 
+      if (layerCubies.length === 0) { resolve(); return; }
+
       const pivot = new THREE.Group();
       this.group.add(pivot);
 
@@ -2251,47 +2270,61 @@ class ShowOffCube {
         pivot.add(mesh);
       }
 
-      const startTime = performance.now();
-      const self = this;
-
-      function animate(now) {
-        const elapsed = now - startTime;
-        const t = Math.min(elapsed / duration, 1);
-        const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-
-        if (axis === 'x') pivot.rotation.x = angle * eased;
-        if (axis === 'y') pivot.rotation.y = angle * eased;
-        if (axis === 'z') pivot.rotation.z = angle * eased;
-
-        if (t < 1) {
-          requestAnimationFrame(animate);
-        } else {
-          // Apply pivot's 90° rotation to each cubie, then reparent
-          for (const mesh of layerCubies) {
-            mesh.position.applyQuaternion(pivot.quaternion);
-            mesh.quaternion.premultiply(pivot.quaternion);
-
-            pivot.remove(mesh);
-            self.group.add(mesh);
-
-            // Snap position to grid
-            mesh.userData.pos = {
-              x: Math.round(mesh.position.x / STEP),
-              y: Math.round(mesh.position.y / STEP),
-              z: Math.round(mesh.position.z / STEP),
-            };
-            mesh.position.set(
-              mesh.userData.pos.x * STEP,
-              mesh.userData.pos.y * STEP,
-              mesh.userData.pos.z * STEP
-            );
-          }
-          self.group.remove(pivot);
-          resolve();
-        }
-      }
-      requestAnimationFrame(animate);
+      // Store as active rotation — tick() will drive the animation
+      this._activeRotation = {
+        axis, angle, pivot, layerCubies, resolve,
+        startTime: performance.now(),
+        duration: Math.max(duration, 1),
+      };
     });
+  }
+
+  // Called every frame from the main tick() loop
+  updateAnimation(now) {
+    const r = this._activeRotation;
+    if (!r) return;
+
+    const t = Math.min((now - r.startTime) / r.duration, 1);
+    const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+    if (r.axis === 'x') r.pivot.rotation.x = r.angle * eased;
+    if (r.axis === 'y') r.pivot.rotation.y = r.angle * eased;
+    if (r.axis === 'z') r.pivot.rotation.z = r.angle * eased;
+
+    if (t >= 1) {
+      this._finishRotation();
+    }
+  }
+
+  _finishRotation() {
+    const r = this._activeRotation;
+    if (!r) return;
+    this._activeRotation = null;
+
+    // Compute pivot world matrix once (same approach as the working global rotateFace)
+    r.pivot.updateMatrixWorld(true);
+
+    for (const mesh of r.layerCubies) {
+      mesh.applyMatrix4(r.pivot.matrixWorld);
+      mesh.position.sub(this.group.position);
+
+      r.pivot.remove(mesh);
+      this.group.add(mesh);
+
+      // Snap position to grid
+      mesh.userData.pos = {
+        x: Math.round(mesh.position.x / STEP),
+        y: Math.round(mesh.position.y / STEP),
+        z: Math.round(mesh.position.z / STEP),
+      };
+      mesh.position.set(
+        mesh.userData.pos.x * STEP,
+        mesh.userData.pos.y * STEP,
+        mesh.userData.pos.z * STEP
+      );
+    }
+    this.group.remove(r.pivot);
+    r.resolve();
   }
 
   async doMove(faceName, clockwise, duration) {
@@ -2513,6 +2546,8 @@ async function showOffScramble() {
       }
     }
     await Promise.all(promises);
+    // Yield to browser between steps
+    await new Promise(r => setTimeout(r, 0));
   }
 
   debugLog('Scramble complete');
@@ -2595,7 +2630,14 @@ async function showOffSolve() {
 
   try {
     for (let i = 0; i < maxLen; i++) {
-      if (i % 5 === 0) debugLog(`Animate step ${i}/${maxLen}`);
+      const movesThisStep = [];
+      for (let c = 0; c < showOffCubes.length; c++) {
+        if (i < allSolutions[c].length) {
+          movesThisStep.push(`c${c}:${allSolutions[c][i].face}${allSolutions[c][i].clockwise ? '' : "'"}`);
+        }
+      }
+      debugLog(`Step ${i+1}/${maxLen}: ${movesThisStep.join(' ')}`);
+
       const promises = [];
       for (let c = 0; c < showOffCubes.length; c++) {
         if (i < allSolutions[c].length) {
@@ -2603,11 +2645,20 @@ async function showOffSolve() {
           promises.push(showOffCubes[c].doMove(move.face, move.clockwise, speed));
         }
       }
-      await Promise.all(promises);
+
+      // Race the animation against a timeout guard (10 seconds)
+      const timeout = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`Step ${i+1} timed out`)), 10000)
+      );
+      await Promise.race([Promise.all(promises), timeout]);
+
+      // Yield to the browser between steps so it can render and stay responsive
+      await new Promise(r => setTimeout(r, 0));
+      debugLog(`Step ${i} done`);
     }
     debugLog('Solve: animation complete');
   } catch (e) {
-    debugLog(`Solve: ANIMATION ERROR: ${e.message}`);
+    debugLog(`Solve: ANIMATION ERROR: ${e.message}\n${e.stack}`);
   }
 
   confettiSystem.fireFromAllCubes();
@@ -2680,10 +2731,17 @@ function tick(now) {
   lastTickTime = now;
 
   orbitControls.update();
-  if (!showOffMode) {
+
+  // Drive all show-off cube animations from this single loop
+  if (showOffMode) {
+    for (const cube of showOffCubes) {
+      cube.updateAnimation(now);
+    }
+  } else {
     updateFaceLabels();
     updateFaceButtonLabels();
   }
+
   if (confettiSystem.active) confettiSystem.update(dt);
   renderer.render(scene, camera);
 }
@@ -2701,7 +2759,9 @@ const btnSolveEl = document.getElementById('btn-solve');
 btnSolveEl.textContent = 'Solve (loading...)';
 btnSolveEl.disabled = true;
 
-setTimeout(() => {
+// Delay main-thread solver init to avoid blocking during show-off mode.
+// Use requestIdleCallback if available, otherwise a long timeout.
+function initMainSolver() {
   try {
     Cube.initSolver();
     solverReady = true;
@@ -2711,7 +2771,12 @@ setTimeout(() => {
     console.error('Solver init failed:', err);
     btnSolveEl.textContent = 'Solve (error)';
   }
-}, 1000);
+}
+if (window.requestIdleCallback) {
+  requestIdleCallback(initMainSolver, { timeout: 5000 });
+} else {
+  setTimeout(initMainSolver, 3000);
+}
 
 // ─── SOLVER WEB WORKER (for show-off mode) ──────────────────
 // Runs Kociemba solver in a background thread so the main thread
