@@ -415,7 +415,7 @@ canvas {
 </div>
 
 <div id="top-bar">
-  <div class="logo">RUBIK'S SOLVER <span style="font-size:10px;opacity:0.5;font-weight:400">v1.0.3</span></div>
+  <div class="logo">RUBIK'S SOLVER <span style="font-size:10px;opacity:0.5;font-weight:400">v1.0.4</span></div>
   <div style="display:flex;gap:8px;">
     <button class="btn" id="btn-toggle-face-controls" title="Toggle face buttons">Controls</button>
     <button class="btn btn-primary" id="btn-showoff" title="Show Off mode">Show Off</button>
@@ -553,7 +553,7 @@ document.getElementById('debug-clear').addEventListener('click', () => {
   try { localStorage.removeItem('rubiks_debug_log'); } catch(e) {}
 });
 
-debugLog('Rubiks Solver v1.0.3 starting');
+debugLog('Rubiks Solver v1.0.4 starting');
 
 // ─── CONSTANTS ───────────────────────────────────────────────
 
@@ -1372,6 +1372,16 @@ function generateScramble(length = 20) {
   return moves;
 }
 
+// Convert a move to cubejs notation string (e.g. "R" or "R'")
+function moveToNotation(face, clockwise) {
+  return face + (clockwise ? '' : "'");
+}
+
+// Build a cubejs move string from moveHistory (space-separated)
+function moveHistoryToString() {
+  return moveHistory.map(m => moveToNotation(m.face, m.clockwise)).join(' ');
+}
+
 function getAnimSpeed() {
   return parseInt(document.getElementById('speed-select').value, 10);
 }
@@ -1609,21 +1619,24 @@ async function solveCube() {
   await new Promise(r => setTimeout(r, 50));
 
   try {
-    const faceletStr = cubeStateToFaceletString();
-    debugLog(`solveCube: facelet=${faceletStr}`);
+    // Use move history to reconstruct state in cubejs's own move system.
+    // This guarantees a valid cube state (our cubeState→facelet mapping has bugs).
+    const movesStr = moveHistoryToString();
+    debugLog(`solveCube: moves="${movesStr}" (${moveHistory.length} moves)`);
     const t0 = performance.now();
 
     let solution;
     if (solverWorkerReady) {
       // Use worker — non-blocking
-      debugLog('solveCube: using worker');
-      const result = await solveInWorker(faceletStr);
+      debugLog('solveCube: using worker (moves mode)');
+      const result = await solveInWorker({ moves: movesStr });
       if (result.type === 'error') throw new Error(result.error);
       solution = result.solution;
     } else {
       // Main thread fallback — blocking
-      debugLog('solveCube: using main thread');
-      const cube = Cube.fromString(faceletStr);
+      debugLog('solveCube: using main thread (moves mode)');
+      const cube = new Cube();
+      cube.move(movesStr);
       solution = cube.solve();
     }
 
@@ -2121,6 +2134,7 @@ class ShowOffCube {
     for (const [face, code] of Object.entries(COLOR_CODE_MAP)) {
       this.cubeState[face] = Array.from({ length: 3 }, () => Array(3).fill(code));
     }
+    this.moveSequence = ''; // Track moves for cubejs solver (guaranteed valid state)
   }
 
   faceColor(x, y, z, fi) {
@@ -2361,6 +2375,9 @@ class ShowOffCube {
 
   async doMove(faceName, clockwise, duration) {
     this.rotateCubeState(faceName, clockwise);
+    // Track move for cubejs solver (bypasses our cubeState→facelet mapping)
+    const notation = faceName + (clockwise ? '' : "'");
+    this.moveSequence += (this.moveSequence ? ' ' : '') + notation;
     return this.rotateFace(faceName, clockwise, duration);
   }
 
@@ -2633,8 +2650,8 @@ async function showOffSolve() {
     statusEl.textContent = `Computing... ${i + 1}/${total}`;
     statusEl.style.display = 'block';
 
-    const faceletStr = soCube.toFaceletString();
-    debugLog(`Cube ${i}: solving [${faceletStr}]`);
+    const movesStr = soCube.moveSequence;
+    debugLog(`Cube ${i}: solving (${movesStr.split(' ').length} moves)`);
 
     // Yield between solver calls so browser can paint status
     await new Promise(r => setTimeout(r, 10));
@@ -2643,15 +2660,16 @@ async function showOffSolve() {
     try {
       let solution;
       if (useWorker) {
-        debugLog(`Cube ${i}: sending to worker...`);
-        const result = await solveInWorker(faceletStr);
+        debugLog(`Cube ${i}: sending moves to worker...`);
+        const result = await solveInWorker({ moves: movesStr });
         debugLog(`Cube ${i}: worker responded, type=${result.type}`);
         if (result.type === 'error') throw new Error(result.error);
         solution = result.solution;
       } else {
-        debugLog(`Cube ${i}: main thread solve...`);
+        debugLog(`Cube ${i}: main thread solve (moves)...`);
         await new Promise(r => setTimeout(r, 50));
-        const cube = Cube.fromString(faceletStr);
+        const cube = new Cube();
+        cube.move(movesStr);
         solution = cube.solve();
       }
 
@@ -2850,13 +2868,21 @@ function initSolverWorker() {
       "  'https://cdn.jsdelivr.net/npm/cubejs@1.3.2/lib/cube.js',",
       "  'https://cdn.jsdelivr.net/npm/cubejs@1.3.2/lib/solve.js'",
       ");",
-      "postMessage({ type: 'log', msg: 'Worker: Cube.initSolver=' + typeof Cube.initSolver + ', Cube.fromString=' + typeof Cube.fromString });",
+      "postMessage({ type: 'log', msg: 'Worker: Cube.initSolver=' + typeof Cube.initSolver + ', Cube.move=' + typeof Cube.prototype.move });",
       "Cube.initSolver();",
       "postMessage({ type: 'log', msg: 'Worker: initSolver complete' });",
       "postMessage({ type: 'ready' });",
       "onmessage = function(e) {",
       "  try {",
-      "    var c = Cube.fromString(e.data.facelet);",
+      "    var c;",
+      "    if (e.data.moves !== undefined) {",
+      "      c = new Cube();",
+      "      if (e.data.moves) c.move(e.data.moves);",
+      "      postMessage({ type: 'log', msg: 'Worker: built cube from moves, facelet=' + c.asString() });",
+      "    } else {",
+      "      c = Cube.fromString(e.data.facelet);",
+      "      postMessage({ type: 'log', msg: 'Worker: built cube from facelet' });",
+      "    }",
       "    var s = c.solve();",
       "    postMessage({ type: 'result', id: e.data.id, solution: s });",
       "  } catch (err) {",
@@ -2893,7 +2919,9 @@ function initSolverWorker() {
   }
 }
 
-function solveInWorker(faceletStr, timeoutMs = 8000) {
+// Send a solve request to the worker.
+// opts: { facelet: '...' } or { moves: 'R U F ...' }
+function solveInWorker(opts, timeoutMs = 8000) {
   return new Promise((resolve) => {
     const id = ++solverWorkerNextId;
     const timer = setTimeout(() => {
@@ -2905,7 +2933,7 @@ function solveInWorker(faceletStr, timeoutMs = 8000) {
       clearTimeout(timer);
       resolve(result);
     };
-    solverWorker.postMessage({ id, facelet: faceletStr });
+    solverWorker.postMessage({ id, ...opts });
   });
 }
 
