@@ -415,7 +415,7 @@ canvas {
 </div>
 
 <div id="top-bar">
-  <div class="logo">RUBIK'S SOLVER <span style="font-size:10px;opacity:0.5;font-weight:400">v1.0.4</span></div>
+  <div class="logo">RUBIK'S SOLVER <span style="font-size:10px;opacity:0.5;font-weight:400">v1.0.5</span></div>
   <div style="display:flex;gap:8px;">
     <button class="btn" id="btn-toggle-face-controls" title="Toggle face buttons">Controls</button>
     <button class="btn btn-primary" id="btn-showoff" title="Show Off mode">Show Off</button>
@@ -553,7 +553,7 @@ document.getElementById('debug-clear').addEventListener('click', () => {
   try { localStorage.removeItem('rubiks_debug_log'); } catch(e) {}
 });
 
-debugLog('Rubiks Solver v1.0.4 starting');
+debugLog('Rubiks Solver v1.0.5 starting');
 
 // ─── CONSTANTS ───────────────────────────────────────────────
 
@@ -2135,6 +2135,7 @@ class ShowOffCube {
       this.cubeState[face] = Array.from({ length: 3 }, () => Array(3).fill(code));
     }
     this.moveSequence = ''; // Track moves for cubejs solver (guaranteed valid state)
+    this.pipeline = { phase: 'idle', moves: [], moveIndex: 0 };
   }
 
   faceColor(x, y, z, fi) {
@@ -2170,6 +2171,22 @@ class ShowOffCube {
         }
       }
     }
+  }
+
+  reset() {
+    // Cancel any in-progress animation
+    if (this._activeRotation) {
+      this._finishRotation();
+    }
+    // Remove old cubies
+    for (const mesh of this.cubies) {
+      mesh.material.forEach(m => m.dispose());
+      this.group.remove(mesh);
+    }
+    this.cubies.length = 0;
+    // Reset state and rebuild
+    this.initState();
+    this.buildCubies();
   }
 
   dispose() {
@@ -2733,29 +2750,129 @@ async function showOffSolve() {
   setShowOffBusy(false);
 }
 
-// ─── SHOW OFF: CONTINUOUS PLAY ───────────────────────────────
+// ─── SHOW OFF: CONTINUOUS PLAY (Per-Cube Pipeline) ───────────
+
+function startCubeScramble(cube) {
+  cube.reset();
+  const scramble = generateScramble(20);
+  cube.pipeline = { phase: 'scrambling', moves: scramble, moveIndex: 0 };
+}
+
+function handleCubeTransition(cube, cubeIndex) {
+  const p = cube.pipeline;
+
+  if (p.phase === 'scrambling') {
+    // Finished scrambling → request solve from worker
+    p.phase = 'waiting_solve';
+    const movesStr = cube.moveSequence;
+    debugLog(`Cube ${cubeIndex}: scramble done → waiting_solve (${movesStr.split(' ').length} moves)`);
+
+    const useWorker = solverWorkerReady;
+    if (useWorker) {
+      solveInWorker({ moves: movesStr }).then(result => {
+        if (!showOffMode) return;
+
+        let solution;
+        if (result.type === 'error') {
+          debugLog(`Cube ${cubeIndex}: worker error, trying main thread`);
+          try {
+            const c = new Cube();
+            c.move(movesStr);
+            solution = c.solve();
+          } catch (e) {
+            debugLog(`Cube ${cubeIndex}: main thread solve also failed: ${e.message}`);
+            solution = '';
+          }
+        } else {
+          solution = result.solution;
+        }
+
+        const moves = parseSolution(solution || '');
+        debugLog(`Cube ${cubeIndex}: solve ready, ${moves.length} moves`);
+        cube.pipeline = { phase: 'solving', moves, moveIndex: 0 };
+      });
+    } else if (solverReady) {
+      try {
+        const c = new Cube();
+        c.move(movesStr);
+        const solution = c.solve();
+        const moves = parseSolution(solution || '');
+        debugLog(`Cube ${cubeIndex}: main thread solve, ${moves.length} moves`);
+        cube.pipeline = { phase: 'solving', moves, moveIndex: 0 };
+      } catch (e) {
+        debugLog(`Cube ${cubeIndex}: main thread solve failed: ${e.message}`);
+        cube.pipeline = { phase: 'idle', moves: [], moveIndex: 0 };
+      }
+    } else {
+      debugLog(`Cube ${cubeIndex}: no solver available, going idle`);
+      cube.pipeline = { phase: 'idle', moves: [], moveIndex: 0 };
+    }
+  }
+  else if (p.phase === 'solving') {
+    debugLog(`Cube ${cubeIndex}: SOLVED! confetti`);
+    confettiSystem.spawnFromCube(cube);
+
+    if (continuousMode) {
+      startCubeScramble(cube);
+    } else {
+      cube.pipeline = { phase: 'idle', moves: [], moveIndex: 0 };
+    }
+  }
+}
+
+function anyCubeActive() {
+  return showOffCubes.some(c => c.pipeline.phase !== 'idle');
+}
 
 async function continuousLoop() {
   continuousRunning = true;
-  // Disable manual scramble/solve while continuous is running
   document.getElementById('so-scramble').disabled = true;
   document.getElementById('so-solve').disabled = true;
 
-  while (continuousMode && showOffMode) {
-    // Scramble
-    await showOffScramble();
-    if (!continuousMode || !showOffMode) break;
+  const speed = getShowOffSpeed();
 
-    // Brief pause before solving
-    await new Promise(r => setTimeout(r, 1000));
-    if (!continuousMode || !showOffMode) break;
+  // Initialize: all cubes start scrambling
+  for (let i = 0; i < showOffCubes.length; i++) {
+    startCubeScramble(showOffCubes[i]);
+    debugLog(`Cube ${i}: starting scramble`);
+  }
 
-    // Solve
-    await showOffSolve();
-    if (!continuousMode || !showOffMode) break;
+  // Beat loop — one move per beat for ALL cubes
+  while (showOffMode && (continuousMode || anyCubeActive())) {
+    const promises = [];
 
-    // Wait for confetti to finish (or 5 seconds)
-    await new Promise(r => setTimeout(r, 5000));
+    for (const cube of showOffCubes) {
+      const p = cube.pipeline;
+
+      // Skip idle or waiting cubes
+      if (p.phase === 'idle' || p.phase === 'waiting_solve') continue;
+
+      // Execute next move if available
+      if (p.moveIndex < p.moves.length) {
+        const move = p.moves[p.moveIndex];
+        promises.push(cube.doMove(move.face, move.clockwise, speed));
+        p.moveIndex++;
+      }
+    }
+
+    // Wait for this beat's animations (or just wait one beat if nothing to do)
+    if (promises.length > 0) {
+      await Promise.all(promises);
+    } else {
+      await new Promise(r => setTimeout(r, speed));
+    }
+    await new Promise(r => setTimeout(r, 0)); // yield
+
+    // Handle transitions AFTER the beat
+    for (let i = 0; i < showOffCubes.length; i++) {
+      const cube = showOffCubes[i];
+      const p = cube.pipeline;
+
+      if ((p.phase === 'scrambling' || p.phase === 'solving')
+          && p.moveIndex >= p.moves.length) {
+        handleCubeTransition(cube, i);
+      }
+    }
   }
 
   continuousRunning = false;
