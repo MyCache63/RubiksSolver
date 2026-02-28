@@ -357,17 +357,16 @@ canvas {
   cursor: pointer;
 }
 
-/* Debug log panel */
+/* Debug log panel — always visible for diagnostics */
 #debug-log {
-  display: none;
+  display: flex;
+  flex-direction: column;
   position: fixed;
   top: 52px;
   left: 8px;
   width: 320px;
   z-index: 300;
 }
-
-#debug-log.visible { display: flex; flex-direction: column; }
 
 #debug-log-header {
   display: flex;
@@ -416,7 +415,7 @@ canvas {
 </div>
 
 <div id="top-bar">
-  <div class="logo">RUBIK'S SOLVER</div>
+  <div class="logo">RUBIK'S SOLVER <span style="font-size:10px;opacity:0.5;font-weight:400">v1.0.1</span></div>
   <div style="display:flex;gap:8px;">
     <button class="btn" id="btn-toggle-face-controls" title="Toggle face buttons">Controls</button>
     <button class="btn btn-primary" id="btn-showoff" title="Show Off mode">Show Off</button>
@@ -553,6 +552,8 @@ document.getElementById('debug-clear').addEventListener('click', () => {
   debugLogEl.value = '';
   try { localStorage.removeItem('rubiks_debug_log'); } catch(e) {}
 });
+
+debugLog('Rubiks Solver v1.0.1 starting');
 
 // ─── CONSTANTS ───────────────────────────────────────────────
 
@@ -1379,9 +1380,11 @@ async function scramble() {
   if (isAnimating) return;
   const speed = getAnimSpeed();
   const moves = generateScramble(20);
+  debugLog(`Scramble: ${moves.length} moves, speed=${speed}ms`);
   for (const move of moves) {
     await doMove(move.face, move.clockwise, true, speed);
   }
+  debugLog('Scramble done');
 }
 
 // ─── RESET ───────────────────────────────────────────────────
@@ -1583,10 +1586,18 @@ function isCubeSolved() {
 // ─── SOLVER: SOLVE & PLAYBACK ────────────────────────────────
 
 async function solveCube() {
-  if (isAnimating || !solverReady) return;
+  if (isAnimating) {
+    debugLog('solveCube: blocked by isAnimating');
+    return;
+  }
+  if (!solverReady) {
+    debugLog('solveCube: solver not ready yet');
+    return;
+  }
 
   if (isCubeSolved()) {
     showSolverStatus('Already solved!');
+    debugLog('solveCube: already solved');
     return;
   }
 
@@ -1594,22 +1605,45 @@ async function solveCube() {
   btnSolve.textContent = 'Solving...';
   btnSolve.disabled = true;
 
+  // Yield so the browser can paint "Solving..." before we block
+  await new Promise(r => setTimeout(r, 50));
+
   try {
     const faceletStr = cubeStateToFaceletString();
-    const cube = Cube.fromString(faceletStr);
-    const solution = cube.solve();
+    debugLog(`solveCube: facelet=${faceletStr}`);
+    const t0 = performance.now();
+
+    let solution;
+    if (solverWorkerReady) {
+      // Use worker — non-blocking
+      debugLog('solveCube: using worker');
+      const result = await solveInWorker(faceletStr);
+      if (result.type === 'error') throw new Error(result.error);
+      solution = result.solution;
+    } else {
+      // Main thread fallback — blocking
+      debugLog('solveCube: using main thread');
+      const cube = Cube.fromString(faceletStr);
+      solution = cube.solve();
+    }
+
+    const elapsed = (performance.now() - t0).toFixed(0);
+    debugLog(`solveCube: solved in ${elapsed}ms → "${solution}"`);
 
     if (!solution || solution.trim() === '') {
       showSolverStatus('No solution found — cube may be in an invalid state');
+      debugLog('solveCube: empty solution');
       btnSolve.textContent = 'Solve';
       btnSolve.disabled = false;
       return;
     }
 
     const moves = parseSolution(solution);
+    debugLog(`solveCube: ${moves.length} moves`);
     currentSolution = { moves, index: 0, rawString: solution };
     showSolutionBar();
   } catch (err) {
+    debugLog(`solveCube: ERROR: ${err.message}`);
     showSolverStatus('Solver error: ' + err.message);
   }
 
@@ -1998,9 +2032,8 @@ function enterShowOffMode() {
   cubieGroup.visible = false;
   faceLabelGroup.visible = false;
 
-  // Show showoff bar + debug log
+  // Show showoff bar
   document.getElementById('showoff-bar').classList.add('visible');
-  debugLogPanel.classList.add('visible');
 
   // Hide show off button, show nothing special in top bar
   document.getElementById('btn-showoff').style.display = 'none';
@@ -2031,9 +2064,8 @@ function exitShowOffMode() {
   cubieGroup.visible = true;
   faceLabelGroup.visible = true;
 
-  // Hide showoff bar + debug log
+  // Hide showoff bar
   document.getElementById('showoff-bar').classList.remove('visible');
-  debugLogPanel.classList.remove('visible');
 
   // Restore buttons
   document.getElementById('btn-showoff').style.display = '';
@@ -2762,12 +2794,18 @@ btnSolveEl.disabled = true;
 // Delay main-thread solver init to avoid blocking during show-off mode.
 // Use requestIdleCallback if available, otherwise a long timeout.
 function initMainSolver() {
+  debugLog('Main solver: initSolver starting...');
+  const t0 = performance.now();
   try {
     Cube.initSolver();
+    const elapsed = (performance.now() - t0).toFixed(0);
     solverReady = true;
     btnSolveEl.textContent = 'Solve';
     btnSolveEl.disabled = false;
+    debugLog(`Main solver: ready in ${elapsed}ms`);
   } catch (err) {
+    const elapsed = (performance.now() - t0).toFixed(0);
+    debugLog(`Main solver: FAILED in ${elapsed}ms: ${err.message}`);
     console.error('Solver init failed:', err);
     btnSolveEl.textContent = 'Solve (error)';
   }
@@ -2789,8 +2827,13 @@ let solverWorkerNextId = 0;
 
 function initSolverWorker() {
   try {
+    // cubejs is a CommonJS module — provide module/exports shim for importScripts
     const code = [
+      "var module = { exports: {} };",
+      "var exports = module.exports;",
       "importScripts('https://cdn.jsdelivr.net/npm/cubejs@1.3.2/lib/cube.js');",
+      "var Cube = module.exports;",
+      "postMessage({ type: 'log', msg: 'Worker: loaded cubejs, initSolver=' + typeof Cube.initSolver });",
       "Cube.initSolver();",
       "postMessage({ type: 'ready' });",
       "onmessage = function(e) {",
@@ -2808,7 +2851,9 @@ function initSolverWorker() {
     solverWorker = new Worker(URL.createObjectURL(blob));
 
     solverWorker.onmessage = function(e) {
-      if (e.data.type === 'ready') {
+      if (e.data.type === 'log') {
+        debugLog(e.data.msg);
+      } else if (e.data.type === 'ready') {
         solverWorkerReady = true;
         debugLog('Solver worker: ready');
       } else {

@@ -69,9 +69,11 @@ Phase 1 + Phase 2A + Show Off Mode implemented in `index.html` (~2592 lines). Si
 
 ## Known Issues / Notes
 
-- cubejs solver init takes ~4-5 seconds — button shows "Solve (loading...)" until ready
-- Solver runs on main thread — may cause brief freeze on complex solves (Web Worker planned for 2B)
+- cubejs solver init takes ~4-5 seconds — button shows "Solve (loading...)" until ready (now deferred via requestIdleCallback)
+- Show Off mode uses Web Worker for solver (main thread stays responsive)
+- Show Off animations centralized in main tick() loop — all cubes animated from single rAF, no per-cube callbacks
 - Show Off with 5×5 (25 cubes, 675 cubies) may be slow on older phones — needs device testing
+- Debug log panel (textarea) visible in show-off mode — logs to localStorage for crash recovery
 - Dynamic face mapping uses `camera.up` vector — works correctly with OrbitControls but if camera flips upside-down the mapping may be unexpected
 - Up/Down arrow keys tilt 30° (not 90°) to avoid camera flip issues
 - Cube state tracking and 3D visual state are maintained separately — both update on each move, but no sync-check exists yet
