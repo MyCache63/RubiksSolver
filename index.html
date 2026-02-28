@@ -708,8 +708,8 @@ function getViewFaces() {
 
 const scene = new THREE.Scene();
 
-const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 100);
-camera.position.set(5, 4, 5);
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
+camera.position.set(6, 5, 6);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -2038,6 +2038,24 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
+  // Zoom: = (or +) zooms in, - zooms out
+  if (e.key === '=' || e.key === '+') {
+    e.preventDefault();
+    const dir = camera.position.clone().normalize();
+    const dist = camera.position.length();
+    const newDist = Math.max(dist - 1.5, orbitControls.minDistance);
+    camera.position.copy(dir.multiplyScalar(newDist));
+    return;
+  }
+  if (e.key === '-' || e.key === '_') {
+    e.preventDefault();
+    const dir = camera.position.clone().normalize();
+    const dist = camera.position.length();
+    const newDist = Math.min(dist + 1.5, orbitControls.maxDistance);
+    camera.position.copy(dir.multiplyScalar(newDist));
+    return;
+  }
+
   if (isAnimating) return;
 
   // Block manual moves during solution playback, show-off mode, or crawler mode
@@ -2220,7 +2238,7 @@ function exitShowOffMode() {
   document.getElementById('btn-toggle-face-controls').style.display = '';
 
   // Reset camera
-  animateCameraToPosition(new THREE.Vector3(5, 4, 5), 500);
+  animateCameraToPosition(new THREE.Vector3(6, 5, 6), 500);
   orbitControls.minDistance = 4;
   orbitControls.maxDistance = 15;
 }
@@ -3199,7 +3217,7 @@ function exitCrawlerMode() {
   document.getElementById('crawler-bar').classList.remove('visible');
 
   // Reset camera
-  animateCameraToPosition(new THREE.Vector3(5, 4, 5), 500);
+  animateCameraToPosition(new THREE.Vector3(6, 5, 6), 500);
   orbitControls.minDistance = 4;
   orbitControls.maxDistance = 15;
 
