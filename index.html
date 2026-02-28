@@ -357,6 +357,36 @@ canvas {
   cursor: pointer;
 }
 
+/* Crawler mode bar */
+#crawler-bar {
+  display: none;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 12px 16px;
+  background: rgba(26, 26, 46, 0.9);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  z-index: 100;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+}
+#crawler-bar.visible { display: flex; }
+#crawler-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+#crawler-status {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
 /* Debug log panel — hidden by default, toggled via Log button */
 #debug-log {
   display: none;
@@ -418,10 +448,11 @@ canvas {
 </div>
 
 <div id="top-bar">
-  <div class="logo">RUBIK'S SOLVER <span style="font-size:10px;opacity:0.5;font-weight:400">v1.0.5</span></div>
+  <div class="logo">RUBIK'S SOLVER <span style="font-size:10px;opacity:0.5;font-weight:400">v1.0.6</span></div>
   <div style="display:flex;gap:8px;">
     <button class="btn" id="btn-toggle-face-controls" title="Toggle face buttons">Controls</button>
     <button class="btn btn-primary" id="btn-showoff" title="Show Off mode">Show Off</button>
+    <button class="btn btn-primary" id="btn-crawler" title="Cube Crawler">Crawler</button>
     <button class="btn" id="btn-debug-toggle" title="Toggle debug log">Log</button>
     <button class="btn" id="btn-help" title="Keyboard shortcuts">?</button>
   </div>
@@ -501,6 +532,20 @@ canvas {
   </div>
 </div>
 
+<div id="crawler-bar">
+  <div id="crawler-actions">
+    <button class="btn btn-primary" id="cr-demo">Demo</button>
+    <select class="btn" id="cr-speed">
+      <option value="600">Slow</option>
+      <option value="350" selected>Medium</option>
+      <option value="150">Fast</option>
+    </select>
+    <button class="btn" id="cr-reset">Reset</button>
+    <button class="btn" id="cr-exit">Exit</button>
+  </div>
+  <div id="crawler-status">Arrow keys to steer · Space to spin</div>
+</div>
+
 <script type="importmap">
 {
   "imports": {
@@ -560,7 +605,7 @@ document.getElementById('btn-debug-toggle').addEventListener('click', () => {
   debugLogPanel.classList.toggle('visible');
 });
 
-debugLog('Rubiks Solver v1.0.5 starting');
+debugLog('Rubiks Solver v1.0.6 starting');
 
 // ─── CONSTANTS ───────────────────────────────────────────────
 
@@ -1496,7 +1541,7 @@ function determineMoveFromDrag(cubiePos, faceNormal, dragDir) {
 }
 
 function onPointerDown(event) {
-  if (showOffMode) return;
+  if (showOffMode || crawlerMode) return;
   if (isAnimating || currentSolution) return;
   if (event.button && event.button !== 0) return; // left click only
 
@@ -1875,6 +1920,45 @@ function snapToNearestCorner(duration = 400) {
 // ─── KEYBOARD CONTROLS ──────────────────────────────────────
 
 document.addEventListener('keydown', (e) => {
+  // Crawler mode — arrow keys steer the cube, space spins
+  if (crawlerMode && !crawlerBusy) {
+    const speed = parseInt(document.getElementById('cr-speed').value) || 350;
+    let dir = null;
+    if (e.key === 'ArrowRight')  dir = '+x';
+    if (e.key === 'ArrowLeft')   dir = '-x';
+    if (e.key === 'ArrowDown')   dir = '+z';
+    if (e.key === 'ArrowUp')     dir = '-z';
+    if (dir) {
+      e.preventDefault();
+      const map = CRAWL_MAP[dir];
+      const nx = crawlerGridX + map.dx;
+      const nz = crawlerGridZ + map.dz;
+      if (nx < 0 || nx >= CRAWL_GRID || nz < 0 || nz >= CRAWL_GRID) {
+        updateCrawlerStatus('Edge of grid!');
+        return;
+      }
+      crawlerBusy = true;
+      crawlerCube.crawlMove(dir, speed).then(() => {
+        crawlerGridX = nx;
+        crawlerGridZ = nz;
+        markTileVisited(nx, nz);
+        crawlerBusy = false;
+        updateCrawlerStatus(`Tile (${nx}, ${nz}) · Arrow keys to steer`);
+      }).catch(() => { crawlerBusy = false; });
+      return;
+    }
+    if (e.key === ' ') {
+      e.preventDefault();
+      crawlerBusy = true;
+      crawlerCube.spinMove(!e.shiftKey, speed).then(() => {
+        crawlerBusy = false;
+        updateCrawlerStatus('Spin! · Arrow keys to steer');
+      }).catch(() => { crawlerBusy = false; });
+      return;
+    }
+  }
+  if (crawlerMode) return; // busy or unhandled key in crawler mode
+
   // Arrow keys — rotate camera view (always available, even during cube animation)
   if (e.key === 'ArrowLeft') {
     e.preventDefault();
@@ -1912,8 +1996,8 @@ document.addEventListener('keydown', (e) => {
 
   if (isAnimating) return;
 
-  // Block manual moves during solution playback or show-off mode
-  if (currentSolution || showOffMode) return;
+  // Block manual moves during solution playback, show-off mode, or crawler mode
+  if (currentSolution || showOffMode || crawlerMode) return;
 
   const key = e.key.toUpperCase();
   const clockwise = !e.shiftKey;
@@ -2043,7 +2127,7 @@ let continuousMode = false;
 let continuousRunning = false;
 
 function enterShowOffMode() {
-  if (showOffMode) return;
+  if (showOffMode || crawlerMode) return;
   showOffMode = true;
 
   // Hide normal UI
@@ -2429,6 +2513,578 @@ class ShowOffCube {
     }
     return true;
   }
+}
+
+// ─── CRAWLER CUBE CLASS ─────────────────────────────────────
+
+const CRAWL_MAP = {
+  '+x': { face1: 'F', cw1: true,  face2: 'B', cw2: false, dx:  1, dz:  0, axis: 'z', sign: -1 },
+  '-x': { face1: 'F', cw1: false, face2: 'B', cw2: true,  dx: -1, dz:  0, axis: 'z', sign:  1 },
+  '+z': { face1: 'R', cw1: true,  face2: 'L', cw2: false, dx:  0, dz:  1, axis: 'x', sign:  1 },
+  '-z': { face1: 'R', cw1: false, face2: 'L', cw2: true,  dx:  0, dz: -1, axis: 'x', sign: -1 },
+};
+
+const CRAWL_TILE_SIZE = 2 * STEP + CUBIE_SIZE; // 3.12 — matches cube width
+const TILE_GAP = 0.1;
+const CRAWL_GRID = 10;
+
+class CrawlerCube {
+  constructor(position) {
+    this.group = new THREE.Group();
+    this.group.position.copy(position);
+    scene.add(this.group);
+    this.cubies = [];
+    this.cubeState = {};
+    this.moveSequence = [];
+    this._activeCrawl = null;
+    this.initState();
+    this.buildCubies();
+  }
+
+  initState() {
+    for (const [face, code] of Object.entries(COLOR_CODE_MAP)) {
+      this.cubeState[face] = Array.from({ length: 3 }, () => Array(3).fill(code));
+    }
+    this.moveSequence = [];
+  }
+
+  faceColor(x, y, z, fi) {
+    if (fi === 0 && x ===  1) return FACE_COLORS.R;
+    if (fi === 1 && x === -1) return FACE_COLORS.L;
+    if (fi === 2 && y ===  1) return FACE_COLORS.U;
+    if (fi === 3 && y === -1) return FACE_COLORS.D;
+    if (fi === 4 && z ===  1) return FACE_COLORS.F;
+    if (fi === 5 && z === -1) return FACE_COLORS.B;
+    return INTERIOR_COLOR;
+  }
+
+  buildCubies() {
+    for (let x = -1; x <= 1; x++) {
+      for (let y = -1; y <= 1; y++) {
+        for (let z = -1; z <= 1; z++) {
+          const materials = [];
+          for (let i = 0; i < 6; i++) {
+            const color = this.faceColor(x, y, z, i);
+            materials.push(new THREE.MeshStandardMaterial({
+              color,
+              roughness: color === INTERIOR_COLOR ? 0.9 : 0.35,
+              metalness: color === INTERIOR_COLOR ? 0.0 : 0.05,
+            }));
+          }
+          const mesh = new THREE.Mesh(sharedCubieGeo, materials);
+          mesh.position.set(x * STEP, y * STEP, z * STEP);
+          mesh.castShadow = false;
+          mesh.receiveShadow = false;
+          mesh.userData.pos = { x, y, z };
+          this.group.add(mesh);
+          this.cubies.push(mesh);
+        }
+      }
+    }
+  }
+
+  reset() {
+    if (this._activeCrawl) this._finishCrawl();
+    for (const mesh of this.cubies) {
+      mesh.material.forEach(m => m.dispose());
+      this.group.remove(mesh);
+    }
+    this.cubies.length = 0;
+    this.initState();
+    this.buildCubies();
+  }
+
+  dispose() {
+    if (this._activeCrawl) this._finishCrawl();
+    for (const mesh of this.cubies) {
+      mesh.material.forEach(m => m.dispose());
+      this.group.remove(mesh);
+    }
+    this.cubies.length = 0;
+    scene.remove(this.group);
+  }
+
+  getCubiesOnLayer(axis, layer) {
+    return this.cubies.filter(m => Math.round(m.userData.pos[axis]) === layer);
+  }
+
+  rotateCubeState(faceName, clockwise) {
+    const face = this.cubeState[faceName];
+    if (clockwise) {
+      const tmp = [
+        [face[2][0], face[1][0], face[0][0]],
+        [face[2][1], face[1][1], face[0][1]],
+        [face[2][2], face[1][2], face[0][2]],
+      ];
+      for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) face[r][c] = tmp[r][c];
+    } else {
+      const tmp = [
+        [face[0][2], face[1][2], face[2][2]],
+        [face[0][1], face[1][1], face[2][1]],
+        [face[0][0], face[1][0], face[2][0]],
+      ];
+      for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) face[r][c] = tmp[r][c];
+    }
+    // Adjacent edges — same as ShowOffCube
+    const s = this.cubeState;
+    if (faceName === 'U') {
+      if (clockwise) {
+        const tmp = [s.F[0][0], s.F[0][1], s.F[0][2]];
+        [s.F[0][0], s.F[0][1], s.F[0][2]] = [s.R[0][0], s.R[0][1], s.R[0][2]];
+        [s.R[0][0], s.R[0][1], s.R[0][2]] = [s.B[0][0], s.B[0][1], s.B[0][2]];
+        [s.B[0][0], s.B[0][1], s.B[0][2]] = [s.L[0][0], s.L[0][1], s.L[0][2]];
+        [s.L[0][0], s.L[0][1], s.L[0][2]] = tmp;
+      } else {
+        const tmp = [s.F[0][0], s.F[0][1], s.F[0][2]];
+        [s.F[0][0], s.F[0][1], s.F[0][2]] = [s.L[0][0], s.L[0][1], s.L[0][2]];
+        [s.L[0][0], s.L[0][1], s.L[0][2]] = [s.B[0][0], s.B[0][1], s.B[0][2]];
+        [s.B[0][0], s.B[0][1], s.B[0][2]] = [s.R[0][0], s.R[0][1], s.R[0][2]];
+        [s.R[0][0], s.R[0][1], s.R[0][2]] = tmp;
+      }
+    } else if (faceName === 'D') {
+      if (clockwise) {
+        const tmp = [s.F[2][0], s.F[2][1], s.F[2][2]];
+        [s.F[2][0], s.F[2][1], s.F[2][2]] = [s.L[2][0], s.L[2][1], s.L[2][2]];
+        [s.L[2][0], s.L[2][1], s.L[2][2]] = [s.B[2][0], s.B[2][1], s.B[2][2]];
+        [s.B[2][0], s.B[2][1], s.B[2][2]] = [s.R[2][0], s.R[2][1], s.R[2][2]];
+        [s.R[2][0], s.R[2][1], s.R[2][2]] = tmp;
+      } else {
+        const tmp = [s.F[2][0], s.F[2][1], s.F[2][2]];
+        [s.F[2][0], s.F[2][1], s.F[2][2]] = [s.R[2][0], s.R[2][1], s.R[2][2]];
+        [s.R[2][0], s.R[2][1], s.R[2][2]] = [s.B[2][0], s.B[2][1], s.B[2][2]];
+        [s.B[2][0], s.B[2][1], s.B[2][2]] = [s.L[2][0], s.L[2][1], s.L[2][2]];
+        [s.L[2][0], s.L[2][1], s.L[2][2]] = tmp;
+      }
+    } else if (faceName === 'F') {
+      if (clockwise) {
+        const tmp = [s.U[2][0], s.U[2][1], s.U[2][2]];
+        [s.U[2][0], s.U[2][1], s.U[2][2]] = [s.L[2][2], s.L[1][2], s.L[0][2]];
+        [s.L[0][2], s.L[1][2], s.L[2][2]] = [s.D[0][0], s.D[0][1], s.D[0][2]];
+        [s.D[0][0], s.D[0][1], s.D[0][2]] = [s.R[2][0], s.R[1][0], s.R[0][0]];
+        [s.R[0][0], s.R[1][0], s.R[2][0]] = tmp;
+      } else {
+        const tmp = [s.U[2][0], s.U[2][1], s.U[2][2]];
+        [s.U[2][0], s.U[2][1], s.U[2][2]] = [s.R[0][0], s.R[1][0], s.R[2][0]];
+        [s.R[0][0], s.R[1][0], s.R[2][0]] = [s.D[0][2], s.D[0][1], s.D[0][0]];
+        [s.D[0][0], s.D[0][1], s.D[0][2]] = [s.L[0][2], s.L[1][2], s.L[2][2]];
+        [s.L[0][2], s.L[1][2], s.L[2][2]] = [tmp[2], tmp[1], tmp[0]];
+      }
+    } else if (faceName === 'B') {
+      if (clockwise) {
+        const tmp = [s.U[0][0], s.U[0][1], s.U[0][2]];
+        [s.U[0][0], s.U[0][1], s.U[0][2]] = [s.R[0][2], s.R[1][2], s.R[2][2]];
+        [s.R[0][2], s.R[1][2], s.R[2][2]] = [s.D[2][2], s.D[2][1], s.D[2][0]];
+        [s.D[2][0], s.D[2][1], s.D[2][2]] = [s.L[0][0], s.L[1][0], s.L[2][0]];
+        [s.L[0][0], s.L[1][0], s.L[2][0]] = [tmp[2], tmp[1], tmp[0]];
+      } else {
+        const tmp = [s.U[0][0], s.U[0][1], s.U[0][2]];
+        [s.U[0][0], s.U[0][1], s.U[0][2]] = [s.L[2][0], s.L[1][0], s.L[0][0]];
+        [s.L[0][0], s.L[1][0], s.L[2][0]] = [s.D[2][2], s.D[2][1], s.D[2][0]];
+        [s.D[2][0], s.D[2][1], s.D[2][2]] = [s.R[2][2], s.R[1][2], s.R[0][2]];
+        [s.R[0][2], s.R[1][2], s.R[2][2]] = tmp;
+      }
+    } else if (faceName === 'R') {
+      if (clockwise) {
+        const tmp = [s.U[0][2], s.U[1][2], s.U[2][2]];
+        [s.U[0][2], s.U[1][2], s.U[2][2]] = [s.F[0][2], s.F[1][2], s.F[2][2]];
+        [s.F[0][2], s.F[1][2], s.F[2][2]] = [s.D[0][2], s.D[1][2], s.D[2][2]];
+        [s.D[0][2], s.D[1][2], s.D[2][2]] = [s.B[2][0], s.B[1][0], s.B[0][0]];
+        [s.B[0][0], s.B[1][0], s.B[2][0]] = [tmp[2], tmp[1], tmp[0]];
+      } else {
+        const tmp = [s.U[0][2], s.U[1][2], s.U[2][2]];
+        [s.U[0][2], s.U[1][2], s.U[2][2]] = [s.B[2][0], s.B[1][0], s.B[0][0]];
+        [s.B[0][0], s.B[1][0], s.B[2][0]] = [s.D[2][2], s.D[1][2], s.D[0][2]];
+        [s.D[0][2], s.D[1][2], s.D[2][2]] = [s.F[0][2], s.F[1][2], s.F[2][2]];
+        [s.F[0][2], s.F[1][2], s.F[2][2]] = tmp;
+      }
+    } else if (faceName === 'L') {
+      if (clockwise) {
+        const tmp = [s.U[0][0], s.U[1][0], s.U[2][0]];
+        [s.U[0][0], s.U[1][0], s.U[2][0]] = [s.B[2][2], s.B[1][2], s.B[0][2]];
+        [s.B[0][2], s.B[1][2], s.B[2][2]] = [s.D[2][0], s.D[1][0], s.D[0][0]];
+        [s.D[0][0], s.D[1][0], s.D[2][0]] = [s.F[0][0], s.F[1][0], s.F[2][0]];
+        [s.F[0][0], s.F[1][0], s.F[2][0]] = tmp;
+      } else {
+        const tmp = [s.U[0][0], s.U[1][0], s.U[2][0]];
+        [s.U[0][0], s.U[1][0], s.U[2][0]] = [s.F[0][0], s.F[1][0], s.F[2][0]];
+        [s.F[0][0], s.F[1][0], s.F[2][0]] = [s.D[0][0], s.D[1][0], s.D[2][0]];
+        [s.D[0][0], s.D[1][0], s.D[2][0]] = [s.B[2][2], s.B[1][2], s.B[0][2]];
+        [s.B[0][2], s.B[1][2], s.B[2][2]] = [tmp[2], tmp[1], tmp[0]];
+      }
+    }
+  }
+
+  // Core crawl animation — two opposing face rotations + translation
+  crawlMove(direction, duration) {
+    return new Promise((resolve, reject) => {
+      if (this._activeCrawl) { reject(new Error('crawl in progress')); return; }
+      const map = CRAWL_MAP[direction];
+      if (!map) { reject(new Error('bad direction')); return; }
+
+      // Update logical cube state for both faces
+      this.rotateCubeState(map.face1, map.cw1);
+      this.rotateCubeState(map.face2, map.cw2);
+      this.moveSequence.push(map.face1 + (map.cw1 ? '' : "'"), map.face2 + (map.cw2 ? '' : "'"));
+
+      // Get layer cubies for both faces
+      const f1 = FACES[map.face1];
+      const f2 = FACES[map.face2];
+      const layer1 = this.getCubiesOnLayer(f1.axis, f1.layer);
+      const layer2 = this.getCubiesOnLayer(f2.axis, f2.layer);
+
+      // Create pivots
+      const pivot1 = new THREE.Group();
+      const pivot2 = new THREE.Group();
+      this.group.add(pivot1);
+      this.group.add(pivot2);
+
+      for (const mesh of layer1) { this.group.remove(mesh); pivot1.add(mesh); }
+      for (const mesh of layer2) { this.group.remove(mesh); pivot2.add(mesh); }
+
+      const angle1 = (map.cw1 ? -1 : 1) * f1.dir * (Math.PI / 2);
+      const angle2 = (map.cw2 ? -1 : 1) * f2.dir * (Math.PI / 2);
+
+      // Translation target
+      const tileStep = CRAWL_TILE_SIZE + TILE_GAP;
+      const startPos = this.group.position.clone();
+      const endPos = startPos.clone();
+      endPos.x += map.dx * tileStep;
+      endPos.z += map.dz * tileStep;
+
+      this._activeCrawl = {
+        pivot1, pivot2, layer1, layer2,
+        axis1: f1.axis, angle1, axis2: f2.axis, angle2,
+        startPos, endPos,
+        startTime: performance.now(),
+        duration: Math.max(duration, 1),
+        resolve,
+      };
+    });
+  }
+
+  // Lazy susan — spin top 2 layers, bottom stays
+  spinMove(clockwise, duration) {
+    return new Promise((resolve, reject) => {
+      if (this._activeCrawl) { reject(new Error('crawl in progress')); return; }
+
+      // Logical state: rotating U layer CW means D-perspective stays, U+middle spin
+      // We rotate U face state, and also rotate the middle-layer edges via an E-slice equivalent
+      // Simpler: U + equator = whole-cube Y minus D. So apply U rotation to state.
+      this.rotateCubeState('U', clockwise);
+      // Also rotate the equator (middle) slice — equivalent to D' when combined with U
+      // The equator follows U direction: rotate adjacent edges of middle row
+      const s = this.cubeState;
+      if (clockwise) {
+        const tmp = [s.F[1][0], s.F[1][1], s.F[1][2]];
+        [s.F[1][0], s.F[1][1], s.F[1][2]] = [s.R[1][0], s.R[1][1], s.R[1][2]];
+        [s.R[1][0], s.R[1][1], s.R[1][2]] = [s.B[1][0], s.B[1][1], s.B[1][2]];
+        [s.B[1][0], s.B[1][1], s.B[1][2]] = [s.L[1][0], s.L[1][1], s.L[1][2]];
+        [s.L[1][0], s.L[1][1], s.L[1][2]] = tmp;
+      } else {
+        const tmp = [s.F[1][0], s.F[1][1], s.F[1][2]];
+        [s.F[1][0], s.F[1][1], s.F[1][2]] = [s.L[1][0], s.L[1][1], s.L[1][2]];
+        [s.L[1][0], s.L[1][1], s.L[1][2]] = [s.B[1][0], s.B[1][1], s.B[1][2]];
+        [s.B[1][0], s.B[1][1], s.B[1][2]] = [s.R[1][0], s.R[1][1], s.R[1][2]];
+        [s.R[1][0], s.R[1][1], s.R[1][2]] = tmp;
+      }
+
+      this.moveSequence.push('spin' + (clockwise ? '' : "'"));
+
+      // Visual: select cubies with y >= 0 (top + middle = 18 cubies)
+      const upperCubies = this.cubies.filter(m => Math.round(m.userData.pos.y) >= 0);
+      const pivot = new THREE.Group();
+      this.group.add(pivot);
+      for (const mesh of upperCubies) { this.group.remove(mesh); pivot.add(mesh); }
+
+      // U CW visually = -Y rotation
+      const angle = clockwise ? -(Math.PI / 2) : (Math.PI / 2);
+
+      this._activeCrawl = {
+        pivot1: pivot, pivot2: null, layer1: upperCubies, layer2: [],
+        axis1: 'y', angle1: angle, axis2: null, angle2: 0,
+        startPos: this.group.position.clone(),
+        endPos: this.group.position.clone(), // no translation
+        startTime: performance.now(),
+        duration: Math.max(duration, 1),
+        resolve,
+      };
+    });
+  }
+
+  updateAnimation(now) {
+    const c = this._activeCrawl;
+    if (!c) return;
+
+    const t = Math.min((now - c.startTime) / c.duration, 1);
+    const eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+    // Rotate pivots
+    if (c.pivot1) {
+      if (c.axis1 === 'x') c.pivot1.rotation.x = c.angle1 * eased;
+      else if (c.axis1 === 'y') c.pivot1.rotation.y = c.angle1 * eased;
+      else if (c.axis1 === 'z') c.pivot1.rotation.z = c.angle1 * eased;
+    }
+    if (c.pivot2) {
+      if (c.axis2 === 'x') c.pivot2.rotation.x = c.angle2 * eased;
+      else if (c.axis2 === 'y') c.pivot2.rotation.y = c.angle2 * eased;
+      else if (c.axis2 === 'z') c.pivot2.rotation.z = c.angle2 * eased;
+    }
+
+    // Translate group
+    this.group.position.lerpVectors(c.startPos, c.endPos, eased);
+
+    if (t >= 1) this._finishCrawl();
+  }
+
+  _finishCrawl() {
+    const c = this._activeCrawl;
+    if (!c) return;
+    this._activeCrawl = null;
+
+    // Reparent cubies from pivot(s) back to group
+    const pivots = [c.pivot1, c.pivot2].filter(Boolean);
+    const layers = [c.layer1, c.layer2];
+    for (let i = 0; i < pivots.length; i++) {
+      const pivot = pivots[i];
+      pivot.updateMatrixWorld(true);
+      for (const mesh of layers[i]) {
+        mesh.applyMatrix4(pivot.matrixWorld);
+        mesh.position.sub(this.group.position);
+        pivot.remove(mesh);
+        this.group.add(mesh);
+        // Snap to grid
+        mesh.userData.pos = {
+          x: Math.round(mesh.position.x / STEP),
+          y: Math.round(mesh.position.y / STEP),
+          z: Math.round(mesh.position.z / STEP),
+        };
+        mesh.position.set(
+          mesh.userData.pos.x * STEP,
+          mesh.userData.pos.y * STEP,
+          mesh.userData.pos.z * STEP
+        );
+      }
+      this.group.remove(pivot);
+    }
+
+    // Snap group position to exact grid position
+    this.group.position.copy(c.endPos);
+
+    c.resolve();
+  }
+}
+
+// ─── CRAWLER MODE ────────────────────────────────────────────
+
+let crawlerMode = false;
+let crawlerCube = null;
+let crawlerBusy = false;
+let crawlerDemoRunning = false;
+let crawlerFloorGroup = null;
+let crawlerTiles = [];
+let crawlerGridX = 0;
+let crawlerGridZ = 0;
+let crawlerVisited = 0;
+let savedFogDensity = 0.02;
+
+function gridToWorld(gx, gz) {
+  const tileStep = CRAWL_TILE_SIZE + TILE_GAP;
+  const totalSpan = CRAWL_GRID * tileStep - TILE_GAP;
+  const halfSpan = totalSpan / 2;
+  return new THREE.Vector3(
+    gx * tileStep - halfSpan + CRAWL_TILE_SIZE / 2,
+    0,
+    gz * tileStep - halfSpan + CRAWL_TILE_SIZE / 2
+  );
+}
+
+function buildCrawlerFloor() {
+  if (crawlerFloorGroup) {
+    scene.remove(crawlerFloorGroup);
+    crawlerFloorGroup = null;
+  }
+  crawlerFloorGroup = new THREE.Group();
+  crawlerTiles = [];
+  const tileGeo = new THREE.BoxGeometry(CRAWL_TILE_SIZE, 0.1, CRAWL_TILE_SIZE);
+  const floorY = -(STEP + CUBIE_SIZE / 2) - 0.05;
+  const tileStep = CRAWL_TILE_SIZE + TILE_GAP;
+  const totalSpan = CRAWL_GRID * tileStep - TILE_GAP;
+  const halfSpan = totalSpan / 2;
+
+  for (let row = 0; row < CRAWL_GRID; row++) {
+    crawlerTiles[row] = [];
+    for (let col = 0; col < CRAWL_GRID; col++) {
+      const isLight = (row + col) % 2 === 0;
+      const color = isLight ? 0x1e2a4a : 0x162040;
+      const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.8, metalness: 0.1 });
+      const tile = new THREE.Mesh(tileGeo, mat);
+      tile.position.set(
+        col * tileStep - halfSpan + CRAWL_TILE_SIZE / 2,
+        floorY,
+        row * tileStep - halfSpan + CRAWL_TILE_SIZE / 2
+      );
+      tile.receiveShadow = true;
+      crawlerFloorGroup.add(tile);
+      crawlerTiles[row][col] = tile;
+    }
+  }
+  scene.add(crawlerFloorGroup);
+}
+
+function markTileVisited(gx, gz) {
+  if (gz >= 0 && gz < CRAWL_GRID && gx >= 0 && gx < CRAWL_GRID) {
+    const tile = crawlerTiles[gz][gx];
+    const isLight = (gz + gx) % 2 === 0;
+    tile.material.color.setHex(isLight ? 0x4a2e6a : 0x3d2560);
+  }
+}
+
+function enterCrawlerMode() {
+  if (crawlerMode || showOffMode) return;
+  crawlerMode = true;
+
+  // Hide normal UI
+  document.getElementById('bottom-bar').style.display = 'none';
+  document.getElementById('info-overlay').style.display = 'none';
+  cubieGroup.visible = false;
+  faceLabelGroup.visible = false;
+  document.getElementById('btn-showoff').style.display = 'none';
+  document.getElementById('btn-crawler').style.display = 'none';
+  document.getElementById('btn-toggle-face-controls').style.display = 'none';
+
+  // Show crawler bar
+  document.getElementById('crawler-bar').classList.add('visible');
+
+  // Reduce fog so far tiles are visible
+  savedFogDensity = scene.fog.density;
+  scene.fog.density = 0.005;
+
+  // Build floor and cube
+  buildCrawlerFloor();
+  crawlerGridX = 0;
+  crawlerGridZ = 0;
+  crawlerVisited = 1;
+  const pos = gridToWorld(0, 0);
+  crawlerCube = new CrawlerCube(pos);
+  markTileVisited(0, 0);
+
+  // Position camera to see full floor
+  const tileStep = CRAWL_TILE_SIZE + TILE_GAP;
+  const totalSpan = CRAWL_GRID * tileStep;
+  const fovRad = (camera.fov * Math.PI) / 180;
+  const dist = (totalSpan / 2) / Math.tan(fovRad / 2) * 1.2;
+  animateCameraToPosition(new THREE.Vector3(dist * 0.6, dist * 0.7, dist * 0.6), 600);
+  orbitControls.minDistance = 5;
+  orbitControls.maxDistance = dist * 2;
+
+  updateCrawlerStatus('Arrow keys to steer · Space to spin');
+  debugLog('Entered crawler mode');
+}
+
+function exitCrawlerMode() {
+  if (!crawlerMode) return;
+
+  crawlerDemoRunning = false;
+
+  // Dispose cube
+  if (crawlerCube) { crawlerCube.dispose(); crawlerCube = null; }
+
+  // Dispose floor
+  if (crawlerFloorGroup) {
+    crawlerFloorGroup.traverse(child => {
+      if (child.isMesh) {
+        child.geometry.dispose();
+        child.material.dispose();
+      }
+    });
+    scene.remove(crawlerFloorGroup);
+    crawlerFloorGroup = null;
+  }
+  crawlerTiles = [];
+
+  crawlerMode = false;
+
+  // Restore fog
+  scene.fog.density = savedFogDensity;
+
+  // Restore UI
+  document.getElementById('bottom-bar').style.display = '';
+  document.getElementById('info-overlay').style.display = '';
+  cubieGroup.visible = true;
+  faceLabelGroup.visible = true;
+  document.getElementById('btn-showoff').style.display = '';
+  document.getElementById('btn-crawler').style.display = '';
+  document.getElementById('btn-toggle-face-controls').style.display = '';
+  document.getElementById('crawler-bar').classList.remove('visible');
+
+  // Reset camera
+  animateCameraToPosition(new THREE.Vector3(5, 4, 5), 500);
+  orbitControls.minDistance = 4;
+  orbitControls.maxDistance = 15;
+
+  debugLog('Exited crawler mode');
+}
+
+function generateSnakePath() {
+  const path = [];
+  for (let row = 0; row < CRAWL_GRID; row++) {
+    if (row > 0) path.push('+z'); // move down to next row
+    const goRight = (row % 2 === 0);
+    for (let i = 0; i < CRAWL_GRID - 1; i++) {
+      path.push(goRight ? '+x' : '-x');
+    }
+  }
+  return path; // 99 moves, 100 tiles
+}
+
+async function runCrawlerDemo() {
+  if (crawlerDemoRunning) return;
+  crawlerDemoRunning = true;
+
+  // Reset to starting position
+  resetCrawler();
+
+  const speed = parseInt(document.getElementById('cr-speed').value) || 350;
+  const path = generateSnakePath();
+  let tileCount = 1; // already on tile 0,0
+
+  for (let i = 0; i < path.length; i++) {
+    if (!crawlerDemoRunning) break;
+    const dir = path[i];
+    const map = CRAWL_MAP[dir];
+    crawlerGridX += map.dx;
+    crawlerGridZ += map.dz;
+
+    crawlerBusy = true;
+    await crawlerCube.crawlMove(dir, speed);
+    markTileVisited(crawlerGridX, crawlerGridZ);
+    tileCount++;
+    crawlerBusy = false;
+    updateCrawlerStatus(`Demo: tile ${tileCount}/100`);
+  }
+
+  crawlerDemoRunning = false;
+  if (crawlerMode) {
+    updateCrawlerStatus('Demo complete! Arrow keys to steer.');
+  }
+}
+
+function resetCrawler() {
+  crawlerDemoRunning = false;
+  crawlerBusy = false;
+  if (crawlerCube) { crawlerCube.dispose(); crawlerCube = null; }
+  buildCrawlerFloor();
+  crawlerGridX = 0;
+  crawlerGridZ = 0;
+  crawlerVisited = 1;
+  const pos = gridToWorld(0, 0);
+  crawlerCube = new CrawlerCube(pos);
+  markTileVisited(0, 0);
+  updateCrawlerStatus('Arrow keys to steer · Space to spin');
+}
+
+function updateCrawlerStatus(msg) {
+  document.getElementById('crawler-status').textContent = msg;
 }
 
 // ─── SHOW OFF GRID & CAMERA ──────────────────────────────────
@@ -2904,6 +3560,12 @@ document.getElementById('so-solve').addEventListener('click', showOffSolve);
 document.getElementById('btn-showoff').addEventListener('click', enterShowOffMode);
 document.getElementById('so-exit').addEventListener('click', exitShowOffMode);
 
+// Wire crawler buttons
+document.getElementById('btn-crawler').addEventListener('click', enterCrawlerMode);
+document.getElementById('cr-demo').addEventListener('click', runCrawlerDemo);
+document.getElementById('cr-reset').addEventListener('click', resetCrawler);
+document.getElementById('cr-exit').addEventListener('click', exitCrawlerMode);
+
 // ─── WINDOW RESIZE ───────────────────────────────────────────
 
 window.addEventListener('resize', () => {
@@ -2928,6 +3590,8 @@ function tick(now) {
     for (const cube of showOffCubes) {
       cube.updateAnimation(now);
     }
+  } else if (crawlerMode) {
+    if (crawlerCube) crawlerCube.updateAnimation(now);
   } else {
     updateFaceLabels();
     updateFaceButtonLabels();
