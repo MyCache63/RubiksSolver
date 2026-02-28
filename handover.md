@@ -8,7 +8,7 @@
 
 ## Current State
 
-Phase 1 + Phase 2A + Show Off Mode + Cube Crawler implemented in `index.html` (~3733 lines). Single HTML file with:
+Phase 1 + Phase 2A + Show Off Mode + Cube Crawler implemented in `index.html` (~3997 lines). Single HTML file with:
 
 ### Working Features
 - **3D rendering** — Three.js with rounded cubelets, proper lighting, shadows, dark theme
@@ -39,12 +39,16 @@ Phase 1 + Phase 2A + Show Off Mode + Cube Crawler implemented in `index.html` (~
   - Own speed selector (Medium/Fast/Instant)
   - Camera auto-zooms to fit grid
   - Normal mode completely isolated — enter/exit cleanly
-- **Cube Crawler Mode** (v1.0.6) — Game mode where cube crawls across 10×10 tile floor:
+- **Cube Crawler Mode** (v1.0.6, auto-solve v1.0.8) — Game mode where cube crawls across 10×10 tile floor:
   - Cube moves by spinning two opposing face layers simultaneously (like wheels)
   - Arrow keys steer: Right=F+B', Left=F'+B, Up=R'+L, Down=R+L'
   - Space bar does lazy-susan spin (top 2 layers rotate, bottom stays put)
+  - Tab key does spin1 (top layer only, U face rotation)
   - 10×10 checkerboard tile floor, tiles turn purple when visited
   - Demo button runs autonomous snake-zigzag covering all 100 tiles
+  - **Scramble button** — moves cube to center (4,4), applies 30 random crawler moves
+  - **Solve button** — reverse-scramble solver using only the 8 crawler moves, with optimization (cancels inverse pairs, collapses repeated spins)
+  - Manual moves after scramble are tracked — solve still works
   - Speed selector (Slow/Medium/Fast)
   - Reset puts cube back at start with fresh floor
   - Fog reduced in crawler mode so far tiles are visible
@@ -55,7 +59,7 @@ Phase 1 + Phase 2A + Show Off Mode + Cube Crawler implemented in `index.html` (~
 - Center: 3D cube (full screen behind UI)
 - Bottom bar: Undo/Redo/Reset + Scramble/Speed/Solve/Flip buttons + solution bar (when solving) + toggleable face controls
 - Show-off bar (replaces bottom bar in show-off mode): Grid buttons + Scramble All/Speed/Solve All + Continuous toggle + Exit
-- Crawler bar (replaces bottom bar in crawler mode): Demo/Speed/Reset/Exit + status text
+- Crawler bar (replaces bottom bar in crawler mode): Demo/Scramble/Solve/Speed/Reset/Exit + status text
 - Solver status overlay: centered messages that auto-hide
 
 ---
@@ -128,3 +132,4 @@ Phase 1 + Phase 2A + Show Off Mode + Cube Crawler implemented in `index.html` (~
 - `before-solver-move-fix-feb28` — Before v1.0.4 solver move-string fix
 - `before-continuous-pipeline-feb28` — Before v1.0.5 independent cube pipelines
 - `before-crawler-feb28` — Before v1.0.6 Cube Crawler mode
+- `before-crawler-autosolve-feb28` — Before v1.0.8 Crawler auto-solve

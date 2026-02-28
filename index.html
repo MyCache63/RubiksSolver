@@ -448,7 +448,7 @@ canvas {
 </div>
 
 <div id="top-bar">
-  <div class="logo">RUBIK'S SOLVER <span style="font-size:10px;opacity:0.5;font-weight:400">v1.0.7</span></div>
+  <div class="logo">RUBIK'S SOLVER <span style="font-size:10px;opacity:0.5;font-weight:400">v1.0.8</span></div>
   <div style="display:flex;gap:8px;">
     <button class="btn" id="btn-toggle-face-controls" title="Toggle face buttons">Controls</button>
     <button class="btn btn-primary" id="btn-showoff" title="Show Off mode">Show Off</button>
@@ -535,6 +535,8 @@ canvas {
 <div id="crawler-bar">
   <div id="crawler-actions">
     <button class="btn btn-primary" id="cr-demo">Demo</button>
+    <button class="btn btn-primary" id="cr-scramble">Scramble</button>
+    <button class="btn btn-primary" id="cr-solve" disabled>Solve</button>
     <select class="btn" id="cr-speed">
       <option value="600">Slow</option>
       <option value="350" selected>Medium</option>
@@ -543,7 +545,7 @@ canvas {
     <button class="btn" id="cr-reset">Reset</button>
     <button class="btn" id="cr-exit">Exit</button>
   </div>
-  <div id="crawler-status">Arrow keys to steer · Space to spin</div>
+  <div id="crawler-status">Arrow keys to steer · Space=spin2 · Tab=spin1</div>
 </div>
 
 <script type="importmap">
@@ -605,7 +607,7 @@ document.getElementById('btn-debug-toggle').addEventListener('click', () => {
   debugLogPanel.classList.toggle('visible');
 });
 
-debugLog('Rubiks Solver v1.0.7 starting');
+debugLog('Rubiks Solver v1.0.8 starting');
 
 // ─── CONSTANTS ───────────────────────────────────────────────
 
@@ -1952,7 +1954,16 @@ document.addEventListener('keydown', (e) => {
       crawlerBusy = true;
       crawlerCube.spinMove(!e.shiftKey, speed).then(() => {
         crawlerBusy = false;
-        updateCrawlerStatus('Spin! · Arrow keys to steer');
+        updateCrawlerStatus('Spin2! · Arrow keys to steer');
+      }).catch(() => { crawlerBusy = false; });
+      return;
+    }
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      crawlerBusy = true;
+      crawlerCube.spin1Move(!e.shiftKey, speed).then(() => {
+        crawlerBusy = false;
+        updateCrawlerStatus('Spin1! · Arrow keys to steer');
       }).catch(() => { crawlerBusy = false; });
       return;
     }
@@ -2528,6 +2539,86 @@ const CRAWL_TILE_SIZE = 2 * STEP + CUBIE_SIZE; // 3.12 — matches cube width
 const TILE_GAP = 0.1;
 const CRAWL_GRID = 10;
 
+const CRAWLER_INVERSE = {
+  '+x': '-x', '-x': '+x', '+z': '-z', '-z': '+z',
+  'spin2': "spin2'", "spin2'": 'spin2',
+  'spin1': "spin1'", "spin1'": 'spin1',
+};
+const ALL_CRAWLER_MOVES = ['+x', '-x', '+z', '-z', 'spin2', "spin2'", 'spin1', "spin1'"];
+
+function generateCrawlerScramble(numMoves, startX, startZ) {
+  const moves = [];
+  let gx = startX, gz = startZ;
+  let consecutiveSpins = 0;
+
+  for (let i = 0; i < numMoves; i++) {
+    // Filter moves by grid bounds and avoid undoing the last move
+    const lastMove = moves.length > 0 ? moves[moves.length - 1] : null;
+    const candidates = ALL_CRAWLER_MOVES.filter(m => {
+      // Don't immediately undo the last move
+      if (lastMove && CRAWLER_INVERSE[m] === lastMove) return false;
+      // Cap consecutive spins at 2
+      if (m.startsWith('spin') && consecutiveSpins >= 2) return false;
+      // Check grid bounds for directional moves
+      const map = CRAWL_MAP[m];
+      if (map) {
+        const nx = gx + map.dx, nz = gz + map.dz;
+        if (nx < 0 || nx >= CRAWL_GRID || nz < 0 || nz >= CRAWL_GRID) return false;
+      }
+      return true;
+    });
+    const move = candidates[Math.floor(Math.random() * candidates.length)];
+    moves.push(move);
+    // Update grid position for directional moves
+    const map = CRAWL_MAP[move];
+    if (map) {
+      gx += map.dx;
+      gz += map.dz;
+      consecutiveSpins = 0;
+    } else {
+      consecutiveSpins++;
+    }
+  }
+  return moves;
+}
+
+function optimizeCrawlerSolution(moves) {
+  let changed = true;
+  while (changed) {
+    changed = false;
+    // Cancel adjacent inverse pairs
+    for (let i = 0; i < moves.length - 1; i++) {
+      if (CRAWLER_INVERSE[moves[i]] === moves[i + 1]) {
+        moves.splice(i, 2);
+        changed = true;
+        break;
+      }
+    }
+    // Collapse 4 identical spins → nothing
+    for (let i = 0; i <= moves.length - 4 && !changed; i++) {
+      if (moves[i].startsWith('spin') &&
+          moves[i] === moves[i+1] && moves[i] === moves[i+2] && moves[i] === moves[i+3]) {
+        moves.splice(i, 4);
+        changed = true;
+      }
+    }
+    // Collapse 3 identical spins → 1 inverse spin
+    for (let i = 0; i <= moves.length - 3 && !changed; i++) {
+      if (moves[i].startsWith('spin') &&
+          moves[i] === moves[i+1] && moves[i] === moves[i+2]) {
+        moves.splice(i, 3, CRAWLER_INVERSE[moves[i]]);
+        changed = true;
+      }
+    }
+  }
+  return moves;
+}
+
+function generateCrawlerSolution(scrambleMoves) {
+  const reversed = [...scrambleMoves].reverse().map(m => CRAWLER_INVERSE[m]);
+  return optimizeCrawlerSolution(reversed);
+}
+
 class CrawlerCube {
   constructor(position) {
     this.group = new THREE.Group();
@@ -2536,6 +2627,7 @@ class CrawlerCube {
     this.cubies = [];
     this.cubeState = {};
     this.moveSequence = [];
+    this.crawlerHistory = [];
     this._activeCrawl = null;
     this.initState();
     this.buildCubies();
@@ -2546,6 +2638,19 @@ class CrawlerCube {
       this.cubeState[face] = Array.from({ length: 3 }, () => Array(3).fill(code));
     }
     this.moveSequence = [];
+    this.crawlerHistory = [];
+  }
+
+  isSolved() {
+    for (const face of ['U', 'D', 'F', 'B', 'R', 'L']) {
+      const center = this.cubeState[face][1][1];
+      for (let r = 0; r < 3; r++) {
+        for (let c = 0; c < 3; c++) {
+          if (this.cubeState[face][r][c] !== center) return false;
+        }
+      }
+    }
+    return true;
   }
 
   faceColor(x, y, z, fi) {
@@ -2590,7 +2695,7 @@ class CrawlerCube {
       this.group.remove(mesh);
     }
     this.cubies.length = 0;
-    this.initState();
+    this.initState();  // also clears crawlerHistory
     this.buildCubies();
   }
 
@@ -2725,6 +2830,7 @@ class CrawlerCube {
       this.rotateCubeState(map.face1, map.cw1);
       this.rotateCubeState(map.face2, map.cw2);
       this.moveSequence.push(map.face1 + (map.cw1 ? '' : "'"), map.face2 + (map.cw2 ? '' : "'"));
+      this.crawlerHistory.push(direction);
 
       // Get layer cubies for both faces
       const f1 = FACES[map.face1];
@@ -2789,6 +2895,7 @@ class CrawlerCube {
       }
 
       this.moveSequence.push('spin' + (clockwise ? '' : "'"));
+      this.crawlerHistory.push('spin2' + (clockwise ? '' : "'"));
 
       // Visual: select cubies with y >= 0 (top + middle = 18 cubies)
       const upperCubies = this.cubies.filter(m => Math.round(m.userData.pos.y) >= 0);
@@ -2801,6 +2908,37 @@ class CrawlerCube {
 
       this._activeCrawl = {
         pivot1: pivot, pivot2: null, layer1: upperCubies, layer2: [],
+        axis1: 'y', angle1: angle, axis2: null, angle2: 0,
+        startPos: this.group.position.clone(),
+        endPos: this.group.position.clone(), // no translation
+        startTime: performance.now(),
+        duration: Math.max(duration, 1),
+        resolve,
+      };
+    });
+  }
+
+  // Spin top layer only — U face rotation, no equator
+  spin1Move(clockwise, duration) {
+    return new Promise((resolve, reject) => {
+      if (this._activeCrawl) { reject(new Error('crawl in progress')); return; }
+
+      // Logical state: only rotate U face
+      this.rotateCubeState('U', clockwise);
+
+      this.moveSequence.push('spin1' + (clockwise ? '' : "'"));
+      this.crawlerHistory.push('spin1' + (clockwise ? '' : "'"));
+
+      // Visual: select cubies with y === 1 (top layer = 9 cubies)
+      const topCubies = this.cubies.filter(m => Math.round(m.userData.pos.y) === 1);
+      const pivot = new THREE.Group();
+      this.group.add(pivot);
+      for (const mesh of topCubies) { this.group.remove(mesh); pivot.add(mesh); }
+
+      const angle = clockwise ? -(Math.PI / 2) : (Math.PI / 2);
+
+      this._activeCrawl = {
+        pivot1: pivot, pivot2: null, layer1: topCubies, layer2: [],
         axis1: 'y', angle1: angle, axis2: null, angle2: 0,
         startPos: this.group.position.clone(),
         endPos: this.group.position.clone(), // no translation
@@ -2880,6 +3018,8 @@ let crawlerMode = false;
 let crawlerCube = null;
 let crawlerBusy = false;
 let crawlerDemoRunning = false;
+let crawlerSolveRunning = false;
+let crawlerScrambleMoves = [];
 let crawlerFloorGroup = null;
 let crawlerTiles = [];
 let crawlerGridX = 0;
@@ -2977,7 +3117,7 @@ function enterCrawlerMode() {
   orbitControls.minDistance = 5;
   orbitControls.maxDistance = dist * 2;
 
-  updateCrawlerStatus('Arrow keys to steer · Space to spin');
+  updateCrawlerStatus('Arrow keys to steer · Space=spin2 · Tab=spin1');
   debugLog('Entered crawler mode');
 }
 
@@ -2985,6 +3125,8 @@ function exitCrawlerMode() {
   if (!crawlerMode) return;
 
   crawlerDemoRunning = false;
+  crawlerSolveRunning = false;
+  crawlerScrambleMoves = [];
 
   // Dispose cube
   if (crawlerCube) { crawlerCube.dispose(); crawlerCube = null; }
@@ -3071,6 +3213,8 @@ async function runCrawlerDemo() {
 
 function resetCrawler() {
   crawlerDemoRunning = false;
+  crawlerSolveRunning = false;
+  crawlerScrambleMoves = [];
   crawlerBusy = false;
   if (crawlerCube) { crawlerCube.dispose(); crawlerCube = null; }
   buildCrawlerFloor();
@@ -3080,7 +3224,125 @@ function resetCrawler() {
   const pos = gridToWorld(0, 0);
   crawlerCube = new CrawlerCube(pos);
   markTileVisited(0, 0);
-  updateCrawlerStatus('Arrow keys to steer · Space to spin');
+  const solveBtn = document.getElementById('cr-solve');
+  if (solveBtn) solveBtn.disabled = true;
+  updateCrawlerStatus('Arrow keys to steer · Space=spin2 · Tab=spin1');
+}
+
+function resetCrawlerToCenter() {
+  crawlerDemoRunning = false;
+  crawlerSolveRunning = false;
+  crawlerScrambleMoves = [];
+  crawlerBusy = false;
+  if (crawlerCube) { crawlerCube.dispose(); crawlerCube = null; }
+  buildCrawlerFloor();
+  crawlerGridX = 4;
+  crawlerGridZ = 4;
+  crawlerVisited = 1;
+  const pos = gridToWorld(4, 4);
+  crawlerCube = new CrawlerCube(pos);
+  markTileVisited(4, 4);
+}
+
+async function executeCrawlerMove(move, speed) {
+  const map = CRAWL_MAP[move];
+  if (map) {
+    // Directional move
+    crawlerGridX += map.dx;
+    crawlerGridZ += map.dz;
+    await crawlerCube.crawlMove(move, speed);
+    markTileVisited(crawlerGridX, crawlerGridZ);
+  } else if (move === 'spin2' || move === "spin2'") {
+    await crawlerCube.spinMove(move === 'spin2', speed);
+  } else if (move === 'spin1' || move === "spin1'") {
+    await crawlerCube.spin1Move(move === 'spin1', speed);
+  }
+}
+
+async function runCrawlerScramble() {
+  if (crawlerBusy || crawlerDemoRunning || crawlerSolveRunning) return;
+
+  // Reset to center of grid for maximum room
+  resetCrawlerToCenter();
+  updateCrawlerStatus('Scrambling...');
+
+  const numMoves = 30;
+  const scramble = generateCrawlerScramble(numMoves, 4, 4);
+  crawlerScrambleMoves = [];
+
+  const speed = Math.min(parseInt(document.getElementById('cr-speed').value) || 350, 150);
+  crawlerBusy = true;
+
+  for (let i = 0; i < scramble.length; i++) {
+    const move = scramble[i];
+    await executeCrawlerMove(move, speed);
+    crawlerScrambleMoves.push(move);
+    updateCrawlerStatus(`Scrambling: ${i + 1}/${scramble.length}`);
+  }
+
+  crawlerBusy = false;
+  const solveBtn = document.getElementById('cr-solve');
+  if (solveBtn) solveBtn.disabled = false;
+  updateCrawlerStatus(`Scrambled (${scramble.length} moves) · Solve or steer manually`);
+}
+
+async function runCrawlerSolve() {
+  if (crawlerBusy || crawlerDemoRunning || crawlerSolveRunning) return;
+  if (!crawlerCube) return;
+
+  // Check if already solved
+  if (crawlerCube.isSolved()) {
+    updateCrawlerStatus('Already solved!');
+    return;
+  }
+
+  // Build solution from full history (scramble + any manual moves)
+  const history = crawlerCube.crawlerHistory.slice();
+  if (history.length === 0) {
+    updateCrawlerStatus('No moves to reverse!');
+    return;
+  }
+
+  const solution = generateCrawlerSolution(history);
+  if (solution.length === 0) {
+    updateCrawlerStatus('Already solved!');
+    return;
+  }
+
+  crawlerSolveRunning = true;
+  crawlerBusy = true;
+  const solveBtn = document.getElementById('cr-solve');
+  if (solveBtn) solveBtn.disabled = true;
+
+  const speed = parseInt(document.getElementById('cr-speed').value) || 350;
+
+  for (let i = 0; i < solution.length; i++) {
+    if (!crawlerSolveRunning || !crawlerMode) break;
+    const move = solution[i];
+
+    // Check grid bounds for directional moves
+    const map = CRAWL_MAP[move];
+    if (map) {
+      const nx = crawlerGridX + map.dx;
+      const nz = crawlerGridZ + map.dz;
+      if (nx < 0 || nx >= CRAWL_GRID || nz < 0 || nz >= CRAWL_GRID) {
+        updateCrawlerStatus('Solve hit grid edge — stopping');
+        break;
+      }
+    }
+
+    await executeCrawlerMove(move, speed);
+    updateCrawlerStatus(`Solving: ${i + 1}/${solution.length}`);
+  }
+
+  crawlerSolveRunning = false;
+  crawlerBusy = false;
+
+  if (crawlerCube && crawlerCube.isSolved()) {
+    updateCrawlerStatus('Solved! · Scramble again or steer');
+  } else {
+    updateCrawlerStatus('Solve complete · Arrow keys to steer');
+  }
 }
 
 function updateCrawlerStatus(msg) {
@@ -3563,6 +3825,8 @@ document.getElementById('so-exit').addEventListener('click', exitShowOffMode);
 // Wire crawler buttons
 document.getElementById('btn-crawler').addEventListener('click', enterCrawlerMode);
 document.getElementById('cr-demo').addEventListener('click', runCrawlerDemo);
+document.getElementById('cr-scramble').addEventListener('click', runCrawlerScramble);
+document.getElementById('cr-solve').addEventListener('click', runCrawlerSolve);
 document.getElementById('cr-reset').addEventListener('click', resetCrawler);
 document.getElementById('cr-exit').addEventListener('click', exitCrawlerMode);
 
