@@ -3440,13 +3440,19 @@ function setCrawlerGridSize(size) {
     btn.classList.toggle('active', parseInt(btn.dataset.crawlGrid) === size);
   });
   resetCrawler();
-  // Reposition camera to fit new grid
+  // Reposition camera to fit new grid — set directly to avoid animation guard
   const tileStep = CRAWL_TILE_SIZE + TILE_GAP;
   const totalSpan = crawlGrid * tileStep;
   const fovRad = (camera.fov * Math.PI) / 180;
   const dist = Math.max((totalSpan / 2) / Math.tan(fovRad / 2) * 1.2, 10);
-  animateCameraToPosition(new THREE.Vector3(dist * 0.6, dist * 0.7, dist * 0.6), 600);
+  const targetPos = new THREE.Vector3(dist * 0.6, dist * 0.7, dist * 0.6);
+  // Force-set camera position (bypass isCameraAnimating guard)
+  isCameraAnimating = false;
+  camera.position.copy(targetPos);
+  camera.lookAt(0, 0, 0);
+  orbitControls.target.set(0, 0, 0);
   orbitControls.maxDistance = dist * 2;
+  orbitControls.update();
 }
 
 // ─── CRAWLER STEP MODE ──────────────────────────────────────
