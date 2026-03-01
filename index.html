@@ -3385,6 +3385,8 @@ async function runCrawlerSolve() {
   if (crawlerBusy || crawlerDemoRunning || crawlerSolveRunning || crawlerStepSolving) return;
   if (!crawlerCube) return;
 
+  debugLog(`Crawler solve: isSolved=${crawlerCube.isSolved()}, history=${crawlerCube.crawlerHistory.length} moves`);
+
   if (crawlerCube.isSolved()) { updateCrawlerStatus('Already solved!'); return; }
 
   const history = crawlerCube.crawlerHistory.slice();
@@ -3395,15 +3397,20 @@ async function runCrawlerSolve() {
   await new Promise(r => setTimeout(r, 50)); // let status paint
 
   const moveStr = crawlerHistoryToMoveString(history);
+  debugLog(`Crawler solve: history=[${history.join(', ')}]`);
   debugLog(`Crawler solve: moveStr="${moveStr}"`);
+  debugLog(`Crawler solve: solverReady=${solverReady}, workerReady=${solverWorkerReady}`);
 
   let solutionStr;
   try {
     if (solverWorkerReady) {
+      debugLog('Crawler solve: using worker');
       const result = await solveInWorker({ moves: moveStr });
+      debugLog(`Crawler solve: worker result type=${result.type}`);
       if (result.type === 'error') throw new Error(result.error);
       solutionStr = result.solution;
     } else if (solverReady) {
+      debugLog('Crawler solve: using main thread');
       const cube = new Cube(); cube.move(moveStr); solutionStr = cube.solve();
     } else {
       crawlerBusy = false;
@@ -3411,14 +3418,15 @@ async function runCrawlerSolve() {
       return;
     }
   } catch (err) {
-    debugLog(`Crawler solve error: ${err.message}`);
+    debugLog(`Crawler solve ERROR: ${err.message}`);
     crawlerBusy = false;
     updateCrawlerStatus('Solve failed — ' + err.message);
     return;
   }
 
+  debugLog(`Crawler solve: solution="${solutionStr}"`);
   const solution = parseCrawlerSolution(solutionStr);
-  debugLog(`Crawler solve: ${solution.length} moves → "${solutionStr}"`);
+  debugLog(`Crawler solve: ${solution.length} parsed moves`);
   crawlerBusy = false;
 
   if (solution.length === 0) { updateCrawlerStatus('Already solved!'); return; }
