@@ -3331,7 +3331,7 @@ async function runCrawlerScramble() {
   updateCrawlerStatus('Scrambling...');
 
   const cx = Math.floor(crawlGrid / 2);
-  const numMoves = Math.max(8, Math.round(crawlGrid * crawlGrid * 0.4));
+  const numMoves = Math.max(20, Math.round(crawlGrid * crawlGrid * 0.4));
   const scramble = generateCrawlerScramble(numMoves, cx, cx);
   crawlerScrambleMoves = [];
 
