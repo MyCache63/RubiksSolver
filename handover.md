@@ -50,7 +50,7 @@ Phase 1 + Phase 2A + Show Off Mode + Cube Crawler implemented in `index.html` (~
   - **Move counter** — tracks all moves, resets on Reset/Scramble
   - Demo button runs autonomous snake-zigzag covering all tiles
   - **Scramble button** — moves cube to center, applies scaled random moves (3×3→8, 5×5→10, 8×8→26)
-  - **Solve button** — reverse-scramble solver with optimization
+  - **Solve button** — real Kociemba solver (converts crawler history to standard notation, solves properly)
   - **Step mode** — Speed=Step enters step-through solving with forward/back buttons + arrow keys
   - Switching Step→Slow/Medium/Fast mid-solve auto-continues remaining moves
   - Speed selector (Slow/Medium/Fast/Step)
@@ -94,7 +94,8 @@ Phase 1 + Phase 2A + Show Off Mode + Cube Crawler implemented in `index.html` (~
 - Show Off mode uses Web Worker for solver (main thread stays responsive)
 - Show Off animations centralized in main tick() loop — all cubes animated from single rAF, no per-cube callbacks
 - Show Off with 5×5 (25 cubes, 675 cubies) may be slow on older phones — needs device testing
-- Crawler mode: CrawlerCube class has its own animation system (dual-pivot for crawl, single-pivot for spin)
+- Crawler mode: CrawlerCube class has its own animation system (dual-pivot for crawl, single-pivot for spin, single-face for solve)
+- Crawler solve uses Kociemba: crawler history → standard move string (spin2=D'+y-frame-shift) → cubejs → face rotations
 - Crawler mode reduces fog density from 0.02 to 0.005, restores on exit
 - Dynamic face mapping uses `camera.up` vector — works correctly with OrbitControls but if camera flips upside-down the mapping may be unexpected
 - Up/Down arrow keys tilt 30° (not 90°) to avoid camera flip issues
@@ -138,3 +139,4 @@ Phase 1 + Phase 2A + Show Off Mode + Cube Crawler implemented in `index.html` (~
 - `before-crawler-feb28` — Before v1.0.6 Cube Crawler mode
 - `before-crawler-autosolve-feb28` — Before v1.0.8 Crawler auto-solve
 - `before-crawler-enhancements-feb28` — Before v1.0.9 Crawler enhancements (step mode, chess board, resizable grid, counter)
+- `before-real-crawler-solve-feb28` — Before real Kociemba solver for crawler mode

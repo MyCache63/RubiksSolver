@@ -2633,42 +2633,6 @@ function generateCrawlerScramble(numMoves, startX, startZ) {
   return moves;
 }
 
-function optimizeCrawlerSolution(moves) {
-  let changed = true;
-  while (changed) {
-    changed = false;
-    // Cancel adjacent inverse pairs
-    for (let i = 0; i < moves.length - 1; i++) {
-      if (CRAWLER_INVERSE[moves[i]] === moves[i + 1]) {
-        moves.splice(i, 2);
-        changed = true;
-        break;
-      }
-    }
-    // Collapse 4 identical spins → nothing
-    for (let i = 0; i <= moves.length - 4 && !changed; i++) {
-      if (moves[i].startsWith('spin') &&
-          moves[i] === moves[i+1] && moves[i] === moves[i+2] && moves[i] === moves[i+3]) {
-        moves.splice(i, 4);
-        changed = true;
-      }
-    }
-    // Collapse 3 identical spins → 1 inverse spin
-    for (let i = 0; i <= moves.length - 3 && !changed; i++) {
-      if (moves[i].startsWith('spin') &&
-          moves[i] === moves[i+1] && moves[i] === moves[i+2]) {
-        moves.splice(i, 3, CRAWLER_INVERSE[moves[i]]);
-        changed = true;
-      }
-    }
-  }
-  return moves;
-}
-
-function generateCrawlerSolution(scrambleMoves) {
-  const reversed = [...scrambleMoves].reverse().map(m => CRAWLER_INVERSE[m]);
-  return optimizeCrawlerSolution(reversed);
-}
 
 class CrawlerCube {
   constructor(position) {
@@ -3061,6 +3025,34 @@ class CrawlerCube {
 
     c.resolve();
   }
+
+  // Single-face rotation for Kociemba solution playback (cube stays in place)
+  solveFaceRotate(faceName, clockwise, duration) {
+    return new Promise((resolve, reject) => {
+      if (this._activeCrawl) { reject(new Error('animation in progress')); return; }
+      const f = FACES[faceName];
+      if (!f) { reject(new Error('bad face: ' + faceName)); return; }
+
+      this.rotateCubeState(faceName, clockwise);
+
+      const layerCubies = this.getCubiesOnLayer(f.axis, f.layer);
+      const pivot = new THREE.Group();
+      this.group.add(pivot);
+      for (const mesh of layerCubies) { this.group.remove(mesh); pivot.add(mesh); }
+
+      const angle = (clockwise ? -1 : 1) * f.dir * (Math.PI / 2);
+
+      this._activeCrawl = {
+        pivot1: pivot, pivot2: null, layer1: layerCubies, layer2: [],
+        axis1: f.axis, angle1: angle, axis2: null, angle2: 0,
+        startPos: this.group.position.clone(),
+        endPos: this.group.position.clone(),
+        startTime: performance.now(),
+        duration: Math.max(duration, 1),
+        resolve,
+      };
+    });
+  }
 }
 
 // ─── CRAWLER MODE ────────────────────────────────────────────
@@ -3351,28 +3343,133 @@ async function runCrawlerScramble() {
   updateCrawlerStatus(`Scrambled (${scramble.length} moves) · Solve or steer manually`);
 }
 
+// Convert crawler move history to standard Rubik's notation for Kociemba solver.
+// spin2 = top 2 layers CW = D' + y-rotation (reference frame shift).
+// We track a running reference frame and remap all subsequent moves.
+function crawlerHistoryToMoveString(history) {
+  // y-rotation remapping: CW from above = F→R, R→B, B→L, L→F
+  const Y_CW  = { F:'R', R:'B', B:'L', L:'F', U:'U', D:'D' };
+  const Y_CCW = { F:'L', L:'B', B:'R', R:'F', U:'U', D:'D' };
+
+  // Current reference frame mapping (logical face → physical face)
+  let frame = { F:'F', R:'R', B:'B', L:'L', U:'U', D:'D' };
+
+  function remap(face) { return frame[face]; }
+
+  function applyYRotation(cw) {
+    const map = cw ? Y_CW : Y_CCW;
+    const newFrame = {};
+    for (const [logical, physical] of Object.entries(frame)) {
+      newFrame[logical] = map[physical] || physical;
+    }
+    // Actually: we need to remap the logical→physical mapping.
+    // After a y rotation, what was physically F is now physically R (CW).
+    // So if frame[F] was 'F', it becomes 'R' after y CW.
+    for (const key of Object.keys(frame)) {
+      frame[key] = map[frame[key]];
+    }
+  }
+
+  const parts = [];
+  for (const move of history) {
+    if (move === '+x') {
+      parts.push(remap('F'), remap('B') + "'");
+    } else if (move === '-x') {
+      parts.push(remap('F') + "'", remap('B'));
+    } else if (move === '+z') {
+      parts.push(remap('R') + "'", remap('L'));
+    } else if (move === '-z') {
+      parts.push(remap('R'), remap('L') + "'");
+    } else if (move === 'spin1') {
+      parts.push(remap('U'));
+    } else if (move === "spin1'") {
+      parts.push(remap('U') + "'");
+    } else if (move === 'spin2') {
+      // spin2 = D' + y rotation (top 2 layers CW = bottom CCW + frame shift)
+      parts.push(remap('D') + "'");
+      applyYRotation(true);
+    } else if (move === "spin2'") {
+      // spin2' = D + y' rotation
+      parts.push(remap('D'));
+      applyYRotation(false);
+    }
+  }
+  return parts.join(' ');
+}
+
+// Parse Kociemba solution string into [{face, clockwise, double}] moves
+function parseCrawlerSolution(solutionStr) {
+  if (!solutionStr || !solutionStr.trim()) return [];
+  return solutionStr.trim().split(/\s+/).map(token => {
+    const face = token[0]; // R, U, F, D, L, B
+    const mod = token.slice(1); // '', "'", "2"
+    if (mod === '2') {
+      return [{ face, clockwise: true }, { face, clockwise: true }];
+    } else {
+      return [{ face, clockwise: mod !== "'" }];
+    }
+  }).flat();
+}
+
 async function runCrawlerSolve() {
   if (crawlerBusy || crawlerDemoRunning || crawlerSolveRunning || crawlerStepSolving) return;
   if (!crawlerCube) return;
 
-  // Check if already solved
   if (crawlerCube.isSolved()) {
     updateCrawlerStatus('Already solved!');
     return;
   }
 
-  // Build solution from full history (scramble + any manual moves)
   const history = crawlerCube.crawlerHistory.slice();
   if (history.length === 0) {
-    updateCrawlerStatus('No moves to reverse!');
+    updateCrawlerStatus('No moves to solve!');
     return;
   }
 
-  const solution = generateCrawlerSolution(history);
+  updateCrawlerStatus('Solving with Kociemba...');
+  crawlerBusy = true;
+
+  // Convert crawler history to standard move string
+  const moveStr = crawlerHistoryToMoveString(history);
+  debugLog(`Crawler solve: moveStr="${moveStr}"`);
+
+  // Small yield so status text paints
+  await new Promise(r => setTimeout(r, 50));
+
+  let solutionStr;
+  try {
+    if (solverWorkerReady) {
+      debugLog('Crawler solve: using worker');
+      const result = await solveInWorker({ moves: moveStr });
+      if (result.type === 'error') throw new Error(result.error);
+      solutionStr = result.solution;
+    } else if (solverReady) {
+      debugLog('Crawler solve: using main thread');
+      const cube = new Cube();
+      cube.move(moveStr);
+      solutionStr = cube.solve();
+    } else {
+      crawlerBusy = false;
+      updateCrawlerStatus('Solver still loading — try again in a moment');
+      return;
+    }
+  } catch (err) {
+    debugLog(`Crawler solve error: ${err.message}`);
+    crawlerBusy = false;
+    updateCrawlerStatus('Solve failed — ' + err.message);
+    return;
+  }
+
+  const solution = parseCrawlerSolution(solutionStr);
+  debugLog(`Crawler solve: ${solution.length} moves → "${solutionStr}"`);
+
   if (solution.length === 0) {
+    crawlerBusy = false;
     updateCrawlerStatus('Already solved!');
     return;
   }
+
+  crawlerBusy = false;
 
   // Step mode — enter step-through instead of auto-playing
   const speedVal = document.getElementById('cr-speed').value;
@@ -3396,18 +3493,7 @@ async function runCrawlerSolveAuto(solution, startIndex) {
     if (!crawlerSolveRunning || !crawlerMode) break;
     const move = solution[i];
 
-    // Check grid bounds for directional moves
-    const map = CRAWL_MAP[move];
-    if (map) {
-      const nx = crawlerGridX + map.dx;
-      const nz = crawlerGridZ + map.dz;
-      if (nx < 0 || nx >= crawlGrid || nz < 0 || nz >= crawlGrid) {
-        updateCrawlerStatus('Solve hit grid edge — stopping');
-        break;
-      }
-    }
-
-    await executeCrawlerMove(move, speed);
+    await crawlerCube.solveFaceRotate(move.face, move.clockwise, speed);
     crawlerMoveCount++;
     updateCrawlerMoveCount();
     updateCrawlerStatus(`Solving: ${i + 1}/${solution.length}`);
@@ -3480,19 +3566,9 @@ async function crawlerStepForward() {
     return;
   }
   const move = crawlerSolution.moves[crawlerSolution.index];
-  // Check grid bounds for directional moves
-  const map = CRAWL_MAP[move];
-  if (map) {
-    const nx = crawlerGridX + map.dx;
-    const nz = crawlerGridZ + map.dz;
-    if (nx < 0 || nx >= crawlGrid || nz < 0 || nz >= crawlGrid) {
-      updateCrawlerStatus('Step hit grid edge — cannot proceed');
-      return;
-    }
-  }
-  const speed = 350; // fixed speed for step mode
+  const speed = 350;
   crawlerBusy = true;
-  await executeCrawlerMove(move, speed);
+  await crawlerCube.solveFaceRotate(move.face, move.clockwise, speed);
   crawlerMoveCount++;
   updateCrawlerMoveCount();
   crawlerBusy = false;
@@ -3516,21 +3592,10 @@ async function crawlerStepBack() {
   }
   crawlerSolution.index--;
   const move = crawlerSolution.moves[crawlerSolution.index];
-  const inverse = CRAWLER_INVERSE[move];
-  // Check grid bounds for inverse move
-  const map = CRAWL_MAP[inverse];
-  if (map) {
-    const nx = crawlerGridX + map.dx;
-    const nz = crawlerGridZ + map.dz;
-    if (nx < 0 || nx >= crawlGrid || nz < 0 || nz >= crawlGrid) {
-      crawlerSolution.index++; // revert
-      updateCrawlerStatus('Step back hit grid edge');
-      return;
-    }
-  }
   const speed = 350;
   crawlerBusy = true;
-  await executeCrawlerMove(inverse, speed);
+  // Inverse: same face, opposite direction
+  await crawlerCube.solveFaceRotate(move.face, !move.clockwise, speed);
   crawlerMoveCount++;
   updateCrawlerMoveCount();
   crawlerBusy = false;
