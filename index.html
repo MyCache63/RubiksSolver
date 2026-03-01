@@ -3547,7 +3547,7 @@ function createShowOffGrid(n) {
   currentGridSize = n;
   debugLog(`Creating ${n}x${n} grid (${n*n} cubes)`);
 
-  document.querySelectorAll('.grid-btn').forEach(btn => {
+  document.querySelectorAll('.grid-btn[data-grid]').forEach(btn => {
     btn.classList.toggle('active', parseInt(btn.dataset.grid) === n);
   });
 
@@ -3580,8 +3580,8 @@ function zoomCameraToFitGrid(n) {
   animateCameraToPosition(targetPos, 600);
 }
 
-// Wire grid preset buttons
-document.querySelectorAll('.grid-btn').forEach(btn => {
+// Wire grid preset buttons (show-off only — use data-grid, not data-crawl-grid)
+document.querySelectorAll('.grid-btn[data-grid]').forEach(btn => {
   btn.addEventListener('click', () => {
     if (showOffBusy) return;
     createShowOffGrid(parseInt(btn.dataset.grid));
