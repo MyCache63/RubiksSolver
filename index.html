@@ -450,7 +450,7 @@ canvas {
 </div>
 
 <div id="top-bar">
-  <div class="logo">RUBIK'S SOLVER <span style="font-size:10px;opacity:0.5;font-weight:400">v1.0.11</span></div>
+  <div class="logo">RUBIK'S SOLVER <span style="font-size:10px;opacity:0.5;font-weight:400">v1.0.12</span></div>
   <div style="display:flex;gap:8px;">
     <button class="btn" id="btn-toggle-face-controls" title="Toggle face buttons">Controls</button>
     <button class="btn btn-primary" id="btn-showoff" title="Show Off mode">Show Off</button>
@@ -619,7 +619,7 @@ document.getElementById('btn-debug-toggle').addEventListener('click', () => {
   debugLogPanel.classList.toggle('visible');
 });
 
-debugLog('Rubiks Solver v1.0.11 starting');
+debugLog('Rubiks Solver v1.0.12 starting');
 
 // ─── CONSTANTS ───────────────────────────────────────────────
 
@@ -2667,6 +2667,19 @@ class CrawlerCube {
     return true;
   }
 
+  toFaceletString() {
+    const colorToFacelet = { W: 'U', R: 'R', G: 'F', Y: 'D', O: 'L', B: 'B' };
+    let str = '';
+    for (const face of ['U', 'R', 'F', 'D', 'L', 'B']) {
+      for (let r = 0; r < 3; r++) {
+        for (let c = 0; c < 3; c++) {
+          str += colorToFacelet[this.cubeState[face][r][c]];
+        }
+      }
+    }
+    return str;
+  }
+
   faceColor(x, y, z, fi) {
     if (fi === 0 && x ===  1) return FACE_COLORS.R;
     if (fi === 1 && x === -1) return FACE_COLORS.L;
@@ -3338,38 +3351,6 @@ async function runCrawlerScramble() {
   updateCrawlerStatus(`Scrambled (${scramble.length} moves) · Solve or steer manually`);
 }
 
-// Convert crawler history to standard Rubik's notation for Kociemba.
-// spin2 = D' + y-rotation (top 2 CW = bottom stays, frame shifts).
-function crawlerHistoryToMoveString(history) {
-  // Frame tracks: physical face position → original face name for cubejs
-  let frame = { F:'F', R:'R', B:'B', L:'L', U:'U', D:'D' };
-
-  function remap(face) { return frame[face]; }
-
-  function applyY(cw) {
-    if (cw) {
-      // y CW from top: L→F position, F→R position, R→B position, B→L position
-      const t = frame.F; frame.F = frame.L; frame.L = frame.B; frame.B = frame.R; frame.R = t;
-    } else {
-      // y CCW: R→F position, F→L position, L→B position, B→R position
-      const t = frame.F; frame.F = frame.R; frame.R = frame.B; frame.B = frame.L; frame.L = t;
-    }
-  }
-
-  const parts = [];
-  for (const move of history) {
-    if (move === '+x')       { parts.push(remap('F'), remap('B') + "'"); }
-    else if (move === '-x')  { parts.push(remap('F') + "'", remap('B')); }
-    else if (move === '+z')  { parts.push(remap('R') + "'", remap('L')); }
-    else if (move === '-z')  { parts.push(remap('R'), remap('L') + "'"); }
-    else if (move === 'spin1')  { parts.push(remap('U')); }
-    else if (move === "spin1'") { parts.push(remap('U') + "'"); }
-    else if (move === 'spin2')  { applyY(true);  parts.push(remap('D')); }
-    else if (move === "spin2'") { applyY(false); parts.push(remap('D') + "'"); }
-  }
-  return parts.join(' ');
-}
-
 // Parse Kociemba solution "R U' F2 D" into [{face, clockwise}] array
 function parseCrawlerSolution(str) {
   if (!str || !str.trim()) return [];
@@ -3385,33 +3366,32 @@ async function runCrawlerSolve() {
   if (crawlerBusy || crawlerDemoRunning || crawlerSolveRunning || crawlerStepSolving) return;
   if (!crawlerCube) return;
 
-  debugLog(`Crawler solve: isSolved=${crawlerCube.isSolved()}, history=${crawlerCube.crawlerHistory.length} moves`);
+  debugLog(`Crawler solve: isSolved=${crawlerCube.isSolved()}`);
 
   if (crawlerCube.isSolved()) { updateCrawlerStatus('Already solved!'); return; }
-
-  const history = crawlerCube.crawlerHistory.slice();
-  if (history.length === 0) { updateCrawlerStatus('No moves to solve!'); return; }
 
   updateCrawlerStatus('Solving with Kociemba...');
   crawlerBusy = true;
   await new Promise(r => setTimeout(r, 50)); // let status paint
 
-  const moveStr = crawlerHistoryToMoveString(history);
-  debugLog(`Crawler solve: history=[${history.join(', ')}]`);
-  debugLog(`Crawler solve: moveStr="${moveStr}"`);
+  // Read the cube's current state directly — no history needed.
+  // This is the "real solver" approach: look at the cube and solve it.
+  const faceletStr = crawlerCube.toFaceletString();
+  debugLog(`Crawler solve: facelet="${faceletStr}"`);
   debugLog(`Crawler solve: solverReady=${solverReady}, workerReady=${solverWorkerReady}`);
 
   let solutionStr;
   try {
     if (solverWorkerReady) {
-      debugLog('Crawler solve: using worker');
-      const result = await solveInWorker({ moves: moveStr });
+      debugLog('Crawler solve: using worker (facelet mode)');
+      const result = await solveInWorker({ facelet: faceletStr });
       debugLog(`Crawler solve: worker result type=${result.type}`);
       if (result.type === 'error') throw new Error(result.error);
       solutionStr = result.solution;
     } else if (solverReady) {
-      debugLog('Crawler solve: using main thread');
-      const cube = new Cube(); cube.move(moveStr); solutionStr = cube.solve();
+      debugLog('Crawler solve: using main thread (facelet mode)');
+      const cube = Cube.fromString(faceletStr);
+      solutionStr = cube.solve();
     } else {
       crawlerBusy = false;
       updateCrawlerStatus('Solver still loading — try again in a moment');
