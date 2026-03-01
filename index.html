@@ -3364,8 +3364,8 @@ function crawlerHistoryToMoveString(history) {
     else if (move === '-z')  { parts.push(remap('R'), remap('L') + "'"); }
     else if (move === 'spin1')  { parts.push(remap('U')); }
     else if (move === "spin1'") { parts.push(remap('U') + "'"); }
-    else if (move === 'spin2')  { parts.push(remap('D') + "'"); applyY(true); }
-    else if (move === "spin2'") { parts.push(remap('D'));        applyY(false); }
+    else if (move === 'spin2')  { applyY(true);  parts.push(remap('D')); }
+    else if (move === "spin2'") { applyY(false); parts.push(remap('D') + "'"); }
   }
   return parts.join(' ');
 }
