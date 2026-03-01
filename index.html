@@ -3351,15 +3351,17 @@ async function runCrawlerScramble() {
   updateCrawlerStatus(`Scrambled (${scramble.length} moves) · Solve or steer manually`);
 }
 
-// Parse Kociemba solution "R U' F2 D" into [{face, clockwise}] array
-function parseCrawlerSolution(str) {
-  if (!str || !str.trim()) return [];
-  return str.trim().split(/\s+/).flatMap(token => {
-    const face = token[0];
-    const mod = token.slice(1);
-    if (mod === '2') return [{ face, clockwise: true }, { face, clockwise: true }];
-    return [{ face, clockwise: mod !== "'" }];
-  });
+// Build crawler solution by reversing the move history.
+// Each crawler move gets inverted and the sequence is reversed.
+function buildCrawlerSolution() {
+  if (!crawlerCube) return [];
+  const history = crawlerCube.crawlerHistory;
+  if (!history || history.length === 0) return [];
+  const solution = [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    solution.push(CRAWLER_INVERSE[history[i]]);
+  }
+  return solution;
 }
 
 async function runCrawlerSolve() {
@@ -3370,46 +3372,15 @@ async function runCrawlerSolve() {
 
   if (crawlerCube.isSolved()) { updateCrawlerStatus('Already solved!'); return; }
 
-  updateCrawlerStatus('Solving with Kociemba...');
-  crawlerBusy = true;
-  await new Promise(r => setTimeout(r, 50)); // let status paint
+  // Build solution by reversing the crawler move history.
+  // This is guaranteed correct: undoing each move in reverse order.
+  const solution = buildCrawlerSolution();
+  debugLog(`Crawler solve: ${solution.length} moves (history reversal)`);
 
-  // Read the cube's current state directly — no history needed.
-  // This is the "real solver" approach: look at the cube and solve it.
-  const faceletStr = crawlerCube.toFaceletString();
-  debugLog(`Crawler solve: facelet="${faceletStr}"`);
-  debugLog(`Crawler solve: solverReady=${solverReady}, workerReady=${solverWorkerReady}`);
-
-  let solutionStr;
-  try {
-    if (solverWorkerReady) {
-      debugLog('Crawler solve: using worker (facelet mode)');
-      const result = await solveInWorker({ facelet: faceletStr });
-      debugLog(`Crawler solve: worker result type=${result.type}`);
-      if (result.type === 'error') throw new Error(result.error);
-      solutionStr = result.solution;
-    } else if (solverReady) {
-      debugLog('Crawler solve: using main thread (facelet mode)');
-      const cube = Cube.fromString(faceletStr);
-      solutionStr = cube.solve();
-    } else {
-      crawlerBusy = false;
-      updateCrawlerStatus('Solver still loading — try again in a moment');
-      return;
-    }
-  } catch (err) {
-    debugLog(`Crawler solve ERROR: ${err.message}`);
-    crawlerBusy = false;
-    updateCrawlerStatus('Solve failed — ' + err.message);
+  if (solution.length === 0) {
+    updateCrawlerStatus('No move history — try Scramble first');
     return;
   }
-
-  debugLog(`Crawler solve: solution="${solutionStr}"`);
-  const solution = parseCrawlerSolution(solutionStr);
-  debugLog(`Crawler solve: ${solution.length} parsed moves`);
-  crawlerBusy = false;
-
-  if (solution.length === 0) { updateCrawlerStatus('Already solved!'); return; }
 
   const speedVal = document.getElementById('cr-speed').value;
   if (speedVal === 'step') { enterCrawlerStepMode(solution); return; }
@@ -3427,7 +3398,7 @@ async function runCrawlerSolveAuto(solution, startIndex) {
   for (let i = startIndex; i < solution.length; i++) {
     if (!crawlerSolveRunning || !crawlerMode) break;
     const move = solution[i];
-    await crawlerCube.solveFaceRotate(move.face, move.clockwise, speed);
+    await executeCrawlerMove(move, speed);
     crawlerMoveCount++;
     updateCrawlerMoveCount();
     updateCrawlerStatus(`Solving: ${i + 1}/${solution.length}`);
@@ -3437,6 +3408,7 @@ async function runCrawlerSolveAuto(solution, startIndex) {
   crawlerBusy = false;
 
   if (crawlerCube && crawlerCube.isSolved()) {
+    crawlerCube.crawlerHistory = [];  // Clear history — cube is solved
     updateCrawlerStatus('Solved! · Scramble again or steer');
   } else {
     updateCrawlerStatus('Solve complete · Arrow keys to steer');
@@ -3501,7 +3473,7 @@ async function crawlerStepForward() {
   }
   const move = crawlerSolution.moves[crawlerSolution.index];
   crawlerBusy = true;
-  await crawlerCube.solveFaceRotate(move.face, move.clockwise, 350);
+  await executeCrawlerMove(move, 350);
   crawlerMoveCount++;
   updateCrawlerMoveCount();
   crawlerBusy = false;
@@ -3510,6 +3482,7 @@ async function crawlerStepForward() {
   if (crawlerSolution.index >= crawlerSolution.moves.length) {
     exitCrawlerStepMode();
     if (crawlerCube && crawlerCube.isSolved()) {
+      crawlerCube.crawlerHistory = [];  // Clear history — cube is solved
       updateCrawlerStatus('Solved! · Scramble again or steer');
     } else {
       updateCrawlerStatus('Solve complete · Arrow keys to steer');
@@ -3525,8 +3498,9 @@ async function crawlerStepBack() {
   }
   crawlerSolution.index--;
   const move = crawlerSolution.moves[crawlerSolution.index];
+  const inverseMove = CRAWLER_INVERSE[move];
   crawlerBusy = true;
-  await crawlerCube.solveFaceRotate(move.face, !move.clockwise, 350);
+  await executeCrawlerMove(inverseMove, 350);
   crawlerMoveCount++;
   updateCrawlerMoveCount();
   crawlerBusy = false;

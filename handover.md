@@ -1,6 +1,6 @@
 # Rubik's Solver — Handover
 
-**Last updated:** Feb 28, 2026
+**Last updated:** Mar 01, 2026
 **Branch:** main
 **Build status:** Single HTML file, opens in any browser, no build step
 
@@ -50,7 +50,7 @@ Phase 1 + Phase 2A + Show Off Mode + Cube Crawler implemented in `index.html` (~
   - **Move counter** — tracks all moves, resets on Reset/Scramble
   - Demo button runs autonomous snake-zigzag covering all tiles
   - **Scramble button** — moves cube to center, applies scaled random moves (3×3→8, 5×5→10, 8×8→26)
-  - **Solve button** — reverse-scramble solver with optimization
+  - **Solve button** — history reversal solver (cube crawls back along its path to solved state)
   - **Step mode** — Speed=Step enters step-through solving with forward/back buttons + arrow keys
   - Switching Step→Slow/Medium/Fast mid-solve auto-continues remaining moves
   - Speed selector (Slow/Medium/Fast/Step)
@@ -68,13 +68,14 @@ Phase 1 + Phase 2A + Show Off Mode + Cube Crawler implemented in `index.html` (~
 
 ---
 
-## What's Next (Phase 2B — Solving Enhancements)
+## What's Next
 
-1. **Beginner method with explanations** — layer-by-layer with plain English
-2. **CFOP method** — advanced solver option
-3. **"Solve My Cube" input** — Paint stickers on 3D cube or unfolded net
-4. **Assisted solve / hints** — show next move suggestions
-5. **Web Worker for solver init** — avoid blocking main thread
+1. **IDA* direct crawler solver** — search for optimal (shorter) crawler solutions instead of history reversal
+2. **Beginner method with explanations** — layer-by-layer with plain English
+3. **CFOP method** — advanced solver option
+4. **"Solve My Cube" input** — Paint stickers on 3D cube or unfolded net
+5. **Assisted solve / hints** — show next move suggestions
+6. **Web Worker for solver init** — avoid blocking main thread
 
 ## What's After That (Phase 3 — Polish)
 
@@ -99,7 +100,8 @@ Phase 1 + Phase 2A + Show Off Mode + Cube Crawler implemented in `index.html` (~
 - Dynamic face mapping uses `camera.up` vector — works correctly with OrbitControls but if camera flips upside-down the mapping may be unexpected
 - Up/Down arrow keys tilt 30° (not 90°) to avoid camera flip issues
 - Cube state tracking and 3D visual state are maintained separately — cubeState used for display, moveHistory used for solver
-- cubeState→facelet mapping has known bugs — DO NOT use for solver, always use move strings
+- Main cube solver uses move strings (cubeState→facelet had bugs); Crawler solver uses history reversal (v1.0.13)
+- **Crawler solver approach**: Reverses crawlerHistory (inverting each move) to solve. BFS research proved that individual face moves (R,L,F,B) are impossible with crawler generators due to the opposite-face coupling constraint. History reversal is guaranteed correct and shorter than macro substitution would have been.
 - Touch drag on mobile may need tuning (works but sensitivity may need adjustment)
 - No service worker yet (requires server for offline)
 - Whole-cube rotation NOT recorded in undo history (it's orientation, not a solve move)
@@ -123,6 +125,8 @@ Phase 1 + Phase 2A + Show Off Mode + Cube Crawler implemented in `index.html` (~
 | `RubiksSolverDesignDocFeb27.md` | Full design document |
 | `start_rubikssolver.sh` | Launch local dev server (or just open index.html) |
 | `run_next_rubikssolver.sh` | Utility commands (open, size, validate) |
+| `crawler_macros.py` | BFS research — proved crawler macro substitution impossible |
+| `SolutionForConvertingRubiksMovesToCrawlerNotationMarch12026.md` | Research paper on crawler ↔ standard notation |
 | `handover.md` | This file |
 
 ---
@@ -138,3 +142,5 @@ Phase 1 + Phase 2A + Show Off Mode + Cube Crawler implemented in `index.html` (~
 - `before-crawler-feb28` — Before v1.0.6 Cube Crawler mode
 - `before-crawler-autosolve-feb28` — Before v1.0.8 Crawler auto-solve
 - `before-crawler-enhancements-feb28` — Before v1.0.9 Crawler enhancements (step mode, chess board, resizable grid, counter)
+- `before-facelet-solver-mar01` — Before v1.0.12 facelet-based Kociemba solver for Crawler
+- `before-crawler-bfs-macros-mar01` — Before v1.0.13 crawler BFS research + history reversal solver
