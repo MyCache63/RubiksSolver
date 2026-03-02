@@ -34,7 +34,11 @@ def apply_perm(state, perm):
     return tuple(state[perm[i]] for i in range(54))
 
 def compose(a, b):
-    """Apply b first, then a. Result[i] = a[b[i]]"""
+    """Permutation composition: Result[i] = a[b[i]].
+    With apply_perm's pulls-from convention, compose(a, b) corresponds
+    to applying a first, then b:
+      apply_perm(apply_perm(state, a), b) == apply_perm(state, compose(a, b))
+    """
     return tuple(a[b[i]] for i in range(54))
 
 def invert(perm):
@@ -52,22 +56,24 @@ def face_cw(offset):
 
 def make_U():
     perm = list(face_cw(0))
+    # Side sticker cycle reversed to match face_cw direction for U face
     cycle = [(18,19,20), (9,10,11), (45,46,47), (36,37,38)]
     for i in range(3):
-        perm[cycle[0][i]] = cycle[3][i]
-        perm[cycle[1][i]] = cycle[0][i]
-        perm[cycle[2][i]] = cycle[1][i]
-        perm[cycle[3][i]] = cycle[2][i]
+        perm[cycle[0][i]] = cycle[1][i]
+        perm[cycle[1][i]] = cycle[2][i]
+        perm[cycle[2][i]] = cycle[3][i]
+        perm[cycle[3][i]] = cycle[0][i]
     return tuple(perm)
 
 def make_D():
     perm = list(face_cw(27))
+    # Side sticker cycle reversed to match face_cw direction for D face
     cycle = [(24,25,26), (42,43,44), (51,52,53), (15,16,17)]
     for i in range(3):
-        perm[cycle[0][i]] = cycle[3][i]
-        perm[cycle[1][i]] = cycle[0][i]
-        perm[cycle[2][i]] = cycle[1][i]
-        perm[cycle[3][i]] = cycle[2][i]
+        perm[cycle[0][i]] = cycle[1][i]
+        perm[cycle[1][i]] = cycle[2][i]
+        perm[cycle[2][i]] = cycle[3][i]
+        perm[cycle[3][i]] = cycle[0][i]
     return tuple(perm)
 
 def make_R():
@@ -93,7 +99,7 @@ def make_F():
 
 def make_B():
     perm = list(face_cw(45))
-    u=[2,1,0]; r=[11,14,17]; d=[33,34,35]; l=[36,39,42]
+    u=[2,1,0]; r=[36,39,42]; d=[33,34,35]; l=[17,14,11]
     for i in range(3):
         perm[r[i]]=u[i]; perm[d[i]]=r[i]; perm[l[i]]=d[i]; perm[u[i]]=l[i]
     return tuple(perm)

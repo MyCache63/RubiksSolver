@@ -556,7 +556,7 @@ canvas {
   </div>
   <div id="crawler-info" style="display:flex;gap:16px;align-items:center">
     <span id="crawler-move-count" style="font-size:12px;color:rgba(255,255,255,0.7)">Moves: 0</span>
-    <span id="crawler-status" style="font-size:12px;color:rgba(255,255,255,0.5)">Arrow keys to steer · Space=spin2 · Tab=spin1</span>
+    <span id="crawler-status" style="font-size:12px;color:rgba(255,255,255,0.5)">Arrows=roll · Space=spin2 · Tab=spin1 · Q=FB · E=LR</span>
   </div>
 </div>
 
@@ -2000,6 +2000,28 @@ document.addEventListener('keydown', (e) => {
       }).catch(() => { crawlerBusy = false; });
       return;
     }
+    if (e.key === 'q' || e.key === 'Q') {
+      e.preventDefault();
+      crawlerBusy = true;
+      crawlerCube.fbSpinMove(!e.shiftKey, speed).then(() => {
+        crawlerBusy = false;
+        crawlerMoveCount++;
+        updateCrawlerMoveCount();
+        updateCrawlerStatus('FB spin! · Arrow keys to steer');
+      }).catch(() => { crawlerBusy = false; });
+      return;
+    }
+    if (e.key === 'e' || e.key === 'E') {
+      e.preventDefault();
+      crawlerBusy = true;
+      crawlerCube.lrSpinMove(!e.shiftKey, speed).then(() => {
+        crawlerBusy = false;
+        crawlerMoveCount++;
+        updateCrawlerMoveCount();
+        updateCrawlerStatus('LR spin! · Arrow keys to steer');
+      }).catch(() => { crawlerBusy = false; });
+      return;
+    }
   }
   if (crawlerMode) return; // busy or unhandled key in crawler mode
 
@@ -2594,8 +2616,10 @@ const CRAWLER_INVERSE = {
   '+x': '-x', '-x': '+x', '+z': '-z', '-z': '+z',
   'spin2': "spin2'", "spin2'": 'spin2',
   'spin1': "spin1'", "spin1'": 'spin1',
+  'fb_spin': "fb_spin'", "fb_spin'": 'fb_spin',
+  'lr_spin': "lr_spin'", "lr_spin'": 'lr_spin',
 };
-const ALL_CRAWLER_MOVES = ['+x', '-x', '+z', '-z', 'spin2', "spin2'", 'spin1', "spin1'"];
+const ALL_CRAWLER_MOVES = ['+x', '-x', '+z', '-z', 'spin2', "spin2'", 'spin1', "spin1'", 'fb_spin', "fb_spin'", 'lr_spin', "lr_spin'"];
 
 function generateCrawlerScramble(numMoves, startX, startZ) {
   const moves = [];
@@ -2608,8 +2632,8 @@ function generateCrawlerScramble(numMoves, startX, startZ) {
     const candidates = ALL_CRAWLER_MOVES.filter(m => {
       // Don't immediately undo the last move
       if (lastMove && CRAWLER_INVERSE[m] === lastMove) return false;
-      // Cap consecutive spins at 2
-      if (m.startsWith('spin') && consecutiveSpins >= 2) return false;
+      // Cap consecutive in-place moves (spins) at 2
+      if (!CRAWL_MAP[m] && consecutiveSpins >= 2) return false;
       // Check grid bounds for directional moves
       const map = CRAWL_MAP[m];
       if (map) {
@@ -2976,6 +3000,84 @@ class CrawlerCube {
     });
   }
 
+  // Same-direction spin: F and B both rotate same direction (from their own perspective)
+  fbSpinMove(clockwise, duration) {
+    return new Promise((resolve, reject) => {
+      if (this._activeCrawl) { reject(new Error('crawl in progress')); return; }
+
+      // Logical state: rotate both F and B in the same CW/CCW direction
+      this.rotateCubeState('F', clockwise);
+      this.rotateCubeState('B', clockwise);
+
+      this.moveSequence.push('F' + (clockwise ? '' : "'"), 'B' + (clockwise ? '' : "'"));
+      this.crawlerHistory.push('fb_spin' + (clockwise ? '' : "'"));
+
+      // Visual: dual pivot — front face + back face, middle stays
+      const f1 = FACES['F'], f2 = FACES['B'];
+      const layer1 = this.getCubiesOnLayer(f1.axis, f1.layer);
+      const layer2 = this.getCubiesOnLayer(f2.axis, f2.layer);
+
+      const pivot1 = new THREE.Group();
+      const pivot2 = new THREE.Group();
+      this.group.add(pivot1);
+      this.group.add(pivot2);
+      for (const mesh of layer1) { this.group.remove(mesh); pivot1.add(mesh); }
+      for (const mesh of layer2) { this.group.remove(mesh); pivot2.add(mesh); }
+
+      const angle1 = (clockwise ? -1 : 1) * f1.dir * (Math.PI / 2);
+      const angle2 = (clockwise ? -1 : 1) * f2.dir * (Math.PI / 2);
+
+      this._activeCrawl = {
+        pivot1, pivot2, layer1, layer2,
+        axis1: f1.axis, angle1, axis2: f2.axis, angle2,
+        startPos: this.group.position.clone(),
+        endPos: this.group.position.clone(), // no translation
+        startTime: performance.now(),
+        duration: Math.max(duration, 1),
+        resolve,
+      };
+    });
+  }
+
+  // Same-direction spin: L and R both rotate same direction (from their own perspective)
+  lrSpinMove(clockwise, duration) {
+    return new Promise((resolve, reject) => {
+      if (this._activeCrawl) { reject(new Error('crawl in progress')); return; }
+
+      // Logical state: rotate both L and R in the same CW/CCW direction
+      this.rotateCubeState('L', clockwise);
+      this.rotateCubeState('R', clockwise);
+
+      this.moveSequence.push('L' + (clockwise ? '' : "'"), 'R' + (clockwise ? '' : "'"));
+      this.crawlerHistory.push('lr_spin' + (clockwise ? '' : "'"));
+
+      // Visual: dual pivot — left face + right face, middle stays
+      const f1 = FACES['L'], f2 = FACES['R'];
+      const layer1 = this.getCubiesOnLayer(f1.axis, f1.layer);
+      const layer2 = this.getCubiesOnLayer(f2.axis, f2.layer);
+
+      const pivot1 = new THREE.Group();
+      const pivot2 = new THREE.Group();
+      this.group.add(pivot1);
+      this.group.add(pivot2);
+      for (const mesh of layer1) { this.group.remove(mesh); pivot1.add(mesh); }
+      for (const mesh of layer2) { this.group.remove(mesh); pivot2.add(mesh); }
+
+      const angle1 = (clockwise ? -1 : 1) * f1.dir * (Math.PI / 2);
+      const angle2 = (clockwise ? -1 : 1) * f2.dir * (Math.PI / 2);
+
+      this._activeCrawl = {
+        pivot1, pivot2, layer1, layer2,
+        axis1: f1.axis, angle1, axis2: f2.axis, angle2,
+        startPos: this.group.position.clone(),
+        endPos: this.group.position.clone(), // no translation
+        startTime: performance.now(),
+        duration: Math.max(duration, 1),
+        resolve,
+      };
+    });
+  }
+
   updateAnimation(now) {
     const c = this._activeCrawl;
     if (!c) return;
@@ -3172,7 +3274,7 @@ function enterCrawlerMode() {
   orbitControls.minDistance = 5;
   orbitControls.maxDistance = dist * 2;
 
-  updateCrawlerStatus('Arrow keys to steer · Space=spin2 · Tab=spin1');
+  updateCrawlerStatus('Arrows=roll · Space=spin2 · Tab=spin1 · Q=FB · E=LR');
   debugLog('Entered crawler mode');
 }
 
@@ -3286,7 +3388,7 @@ function resetCrawler() {
   markTileVisited(0, 0);
   const solveBtn = document.getElementById('cr-solve');
   if (solveBtn) solveBtn.disabled = true;
-  updateCrawlerStatus('Arrow keys to steer · Space=spin2 · Tab=spin1');
+  updateCrawlerStatus('Arrows=roll · Space=spin2 · Tab=spin1 · Q=FB · E=LR');
 }
 
 function resetCrawlerToCenter() {
@@ -3320,6 +3422,10 @@ async function executeCrawlerMove(move, speed) {
     await crawlerCube.spinMove(move === 'spin2', speed);
   } else if (move === 'spin1' || move === "spin1'") {
     await crawlerCube.spin1Move(move === 'spin1', speed);
+  } else if (move === 'fb_spin' || move === "fb_spin'") {
+    await crawlerCube.fbSpinMove(move === 'fb_spin', speed);
+  } else if (move === 'lr_spin' || move === "lr_spin'") {
+    await crawlerCube.lrSpinMove(move === 'lr_spin', speed);
   }
 }
 

@@ -102,6 +102,7 @@ Phase 1 + Phase 2A + Show Off Mode + Cube Crawler implemented in `index.html` (~
 - Cube state tracking and 3D visual state are maintained separately — cubeState used for display, moveHistory used for solver
 - Main cube solver uses move strings (cubeState→facelet had bugs); Crawler solver uses history reversal (v1.0.13)
 - **Crawler solver approach**: Reverses crawlerHistory (inverting each move) to solve. BFS research proved that individual face moves (R,L,F,B) are impossible with crawler generators due to the opposite-face coupling constraint. History reversal is guaranteed correct and shorter than macro substitution would have been.
+- **Crawler Macro Discovery (March 2)**: Research into two-phase crawler solver using extended generators (same-direction spins). Fixed make_U/make_D side sticker cycle bug in crawler_macros.py. Corner BFS table verified: 88M states, all reachable, God's number=26. Corner solver works (R solved in 3 moves, D in 4). Edge solver still in progress. Python research scripts only — game uses history reversal.
 - Touch drag on mobile may need tuning (works but sensitivity may need adjustment)
 - No service worker yet (requires server for offline)
 - Whole-cube rotation NOT recorded in undo history (it's orientation, not a solve move)
